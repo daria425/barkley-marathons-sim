@@ -61,7 +61,9 @@ Kept in mind for config decisions now, not built yet:
   sim/loop.py        async tick loop, speed multiplier
   sim/physiology.py  PURE functions, no async, no API calls
   sim/course.py      gpxpy loop, books, off-course terrain
-  sim/world.py       weather, day/night, fog
+  sim/frozen_head_state_park.py  weather, day/night, fog (class `FrozenHeadStatePark`, née `WorldState`) —
+                      named for the race's actual, fixed venue; fine to be park-specific since
+                      the whole sim already is (books/loops/cutoffs are Barkley-only rules)
   agents/brain.py    prompt build, thin complete() wrapper around AsyncAnthropic, parse into Decision
   agents/personas.py loads persona YAML/JSON files
   agents/personas/   persona data files (name, traits, system prompt template)
