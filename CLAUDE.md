@@ -21,9 +21,9 @@ This is a collaboration, not a hand-the-keys-over build. Specifically:
 
 **v1 ("one runner thinks and runs")**: single runner, single persona, LLM-driven decisions, full physiology + weather/environment + course/books + noisy believed-position navigation. Real concurrency pattern (semaphore + fire-and-forget tasks + last-decision-wins) built now, not deferred, since it doesn't get simpler by waiting. SQLite logging + Langfuse tracing wired in from v1. **No frontend in v1** — verify behavior by connecting to the WebSocket directly (e.g. `websocat`/a small script) and watching state + brain calls stream live, plus SQLite queries after the fact.
 
-- **No race-end concept yet.** `WorldState`/`RunnerState` don't need to model finishing all 5 loops or hitting the 60h cutoff for v1 — for now we just want to watch it run and see what happens. Finish-line/cutoff handling gets designed later, once there's something worth finishing.
+- **No race-end concept yet.** `RaceState`/`RunnerState` don't need to model finishing all 5 loops or hitting the 60h cutoff for v1 — for now we just want to watch it run and see what happens. Finish-line/cutoff handling gets designed later, once there's something worth finishing.
 - **Speed multiplier is a dev convenience, not the target mode.** The eventual "real" way to run this is at 1x realtime for the full ~60 hours, so runner behavior and pacing stay realistic. 60x/600x speed is for iterating during development, not the intended experience.
-- **v1's API surface:** a start endpoint (REST) to kick off a run, and a **WebSocket from v1** streaming live `WorldState`/`RunnerState` updates plus brain-call/monologue events — this is what "no frontend yet" is verified against, and it's the same contract the frontend plugs into later. No separate polling/REST-status endpoint needed for now.
+- **v1's API surface:** a start endpoint (REST) to kick off a run, and a **WebSocket from v1** streaming live `RaceState`/`RunnerState` updates plus brain-call/monologue events — this is what "no frontend yet" is verified against, and it's the same contract the frontend plugs into later. No separate polling/REST-status endpoint needed for now.
 
 **Right after v1**: SQLite-backed checkpoint/resume becomes load-bearing (not just nice-to-have logging) — see "Memory and persistence" below.
 
@@ -57,11 +57,14 @@ Kept in mind for config decisions now, not built yet:
 ```
 /server
   main.py            FastAPI app, WS endpoint, start/stop run
-  models.py          Pydantic: Observation, Decision, RunnerState, WorldState
+  models.py          Pydantic: Observation, Decision, RunnerState, RaceState
+                      (RunnerState embeds sim/physiology.py's PhysiologyState; RaceState
+                      embeds sim/frozen_head_state_park.py's FrozenHeadStatePark — models.py
+                      is the API/WS/DB wire format, the sim/ modules are internal pure math)
   sim/loop.py        async tick loop, speed multiplier
   sim/physiology.py  PURE functions, no async, no API calls
   sim/course.py      gpxpy loop, books, off-course terrain
-  sim/frozen_head_state_park.py  weather, day/night, fog (class `FrozenHeadStatePark`, née `WorldState`) —
+  sim/frozen_head_state_park.py  weather, day/night, fog (class `FrozenHeadStatePark`) —
                       named for the race's actual, fixed venue; fine to be park-specific since
                       the whole sim already is (books/loops/cutoffs are Barkley-only rules)
   agents/brain.py    prompt build, thin complete() wrapper around AsyncAnthropic, parse into Decision
