@@ -1,7 +1,7 @@
 # ADR-0005: Vertical LLM smoke-test slice before building `course.py`
 
 **Date**: 2026-09-17
-**Status**: proposed
+**Status**: accepted
 **Deciders**: Daria
 
 ## Context
@@ -15,14 +15,26 @@ at all.
 
 ## Decision
 
-Insert a throwaway vertical slice: wire up `agents/brain.py` + one persona + a minimal
-`sim/loop.py`, run it for a few real minutes against **stubbed** course-dependent Observation
-fields (fixed coords, hardcoded terrain, `loop=1`, `books_found=0`), and confirm one full
-Observation → Decision → monologue round-trip logs correctly. `course.py` gets built for real
-immediately after, replacing the stubs. Brain-call cadence for this slice is every tick, with
+Insert a throwaway vertical slice: wire up a brain/persona module + a minimal `sim/loop.py`,
+run it for a few real minutes against **stubbed** course-dependent Observation fields (fixed
+coords, hardcoded terrain, `loop=1`, `books_found=0`), and confirm one full Observation →
+Decision → monologue round-trip logs correctly. `course.py` gets built for real immediately
+after, replacing the stubs. Brain-call cadence for this slice is every tick, with
 `dt_min=0.25` sim-minutes per tick (real-time ratio preserved — 15 real seconds per tick at
 1x) rather than CLAUDE.md's undecided-but-implied 1-sim-minute tick, so the slice is fast
 enough to iterate on live.
+
+(What actually got built: `agents/participant.py` with a `Participant` class, not the
+`agents/brain.py` free-function module CLAUDE.md's layout originally named — see CLAUDE.md's
+updated Layout section. `agents/memory.py`'s sliding-window replay also landed as part of this
+slice, ahead of CLAUDE.md's original "phase 2" schedule for memory — see ADR-0006's Context.)
+
+## Outcome
+
+Ran clean end to end on 2026-09-18: persona-driven monologues stayed in character, referenced
+prior ticks correctly (memory replay working), physiology/weather ticked correctly, all turns
+logged to SQLite, and — once ADR-0006's fixes landed — all generations traced to Langfuse.
+`course.py` is next, replacing the stubs called out above.
 
 ## Alternatives Considered
 

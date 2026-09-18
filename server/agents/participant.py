@@ -3,10 +3,18 @@
 complete() is the one place that touches the Anthropic SDK directly (CLAUDE.md: "cheap
 insurance against ever wanting to swap providers, without adding an actual gateway") — it's a
 free function, not a method, since it isn't persona-specific and every Participant shares it.
+
+Uses messages.create() with a raw output_config JSON schema rather than the messages.parse()
+convenience wrapper. Confirmed empirically: opentelemetry-instrumentation-anthropic (the
+Langfuse tracing integration) only instruments .create(), not .parse() — using .parse() traced
+nothing to Langfuse despite auth/setup being correct. Same structured-output guarantee either
+way, .create() is just the one that's actually observable.
 """
 
+import json
+
 from anthropic import AsyncAnthropic
-from anthropic.types import ParsedMessage
+from anthropic.types import Message
 
 from agents.memory import format_observation, turns_to_messages
 from agents.personas import Persona
@@ -16,16 +24,19 @@ MODEL = "claude-haiku-4-5-20251001"
 
 _client = AsyncAnthropic()
 
+_DECISION_SCHEMA = Decision.model_json_schema()
+_DECISION_SCHEMA["additionalProperties"] = False
 
-async def complete(system: str, messages: list[dict]) -> ParsedMessage[Decision]:
-    """Structured-output call: response.parsed_output is a validated Decision, no
-    tool-call/JSON-parsing detour needed."""
-    return await _client.messages.parse(
+
+async def complete(system: str, messages: list[dict]) -> Message:
+    """Structured-output call via output_config — see module docstring for why .create()
+    over .parse()."""
+    return await _client.messages.create(
         model=MODEL,
         max_tokens=1024,
         system=system,
         messages=messages,
-        output_format=Decision,
+        output_config={"format": {"type": "json_schema", "schema": _DECISION_SCHEMA}},
     )
 
 
@@ -57,6 +68,7 @@ class Participant:
         messages = self.build_prompt(obs, history)
         try:
             response = await complete(system=self.persona.system_prompt_template, messages=messages)
-            return response.parsed_output
+            text = next(block.text for block in response.content if block.type == "text")
+            return Decision.model_validate(json.loads(text))
         except Exception:
             return None

@@ -79,6 +79,18 @@ def has_collapsed(bonk_push_min: float) -> bool:
     return bonk_push_min >= BONK_PUSH_LIMIT_MIN
 
 
+def describe_feel(glycogen_pct: float, collapsed: bool) -> str:
+    """Text label for Observation.feel — kept next to is_bonking/has_collapsed since it
+    directly depends on their thresholds, rather than duplicated at the call site."""
+    if collapsed:
+        return "collapsed, body won't listen anymore"
+    if is_bonking(glycogen_pct):
+        return "bonking"
+    if glycogen_pct < 50.0:
+        return "legs heavy"
+    return "feeling good"
+
+
 def compute_pace(
     start_pace_min_per_km: float,
     effort_rpe: int,

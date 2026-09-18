@@ -23,6 +23,7 @@ This is a collaboration, not a hand-the-keys-over build. Specifically:
 
 - **No race-end concept yet.** `RaceState`/`RunnerState` don't need to model finishing all 5 loops or hitting the 60h cutoff for v1 — for now we just want to watch it run and see what happens. Finish-line/cutoff handling gets designed later, once there's something worth finishing.
 - **Speed multiplier is a dev convenience, not the target mode.** The eventual "real" way to run this is at 1x realtime for the full ~60 hours, so runner behavior and pacing stay realistic. 60x/600x speed is for iterating during development, not the intended experience.
+- **Vertical-slice-first, across every phase (see ADR-0007).** Every phase — including persistence, multi-persona, and the frontend — gets built as a small, sped-up, end-to-end slice first (stubs where a later phase will replace them), rather than fully fleshed out before the next phase starts. Only once the whole chain runs end to end does the project switch to full 1x/60h/full-roster scope ("let it rip", Build order step 5). A phase is "done enough to move on" once its slice works, not once it's complete.
 - **v1's API surface:** a start endpoint (REST) to kick off a run, and a **WebSocket from v1** streaming live `RaceState`/`RunnerState` updates plus brain-call/monologue events — this is what "no frontend yet" is verified against, and it's the same contract the frontend plugs into later. No separate polling/REST-status endpoint needed for now.
 
 **Right after v1**: SQLite-backed checkpoint/resume becomes load-bearing (not just nice-to-have logging) — see "Memory and persistence" below.
@@ -34,7 +35,7 @@ This is a collaboration, not a hand-the-keys-over build. Specifically:
 ## Stack
 
 - **Backend:** Python, FastAPI + uvicorn, native WebSockets, asyncio sim loop
-- **LLM:** `anthropic` AsyncAnthropic client, model `claude-haiku-4-5-20251001`, called through a thin `complete()` wrapper (see Brain below) — cheap insurance against ever wanting to swap providers, without adding an actual gateway
+- **LLM:** `anthropic` AsyncAnthropic client, model `claude-haiku-4-5-20251001`, called through a thin `complete()` wrapper (`agents/participant.py`, see Layout below) — cheap insurance against ever wanting to swap providers, without adding an actual gateway. Structured output goes through `messages.create()` + a raw `output_config` JSON schema, not the `messages.parse()` convenience helper — `.parse()` isn't traced by the Langfuse/OTel Anthropic instrumentation (ADR-0006).
 - **Observability:** Langfuse, tracing Anthropic calls from v1 onward
 - **Schemas:** Pydantic v2 (source of truth)
 - **Storage:** SQLite via aiosqlite or SQLModel (source of truth for runner history, checkpoint/resume, LLM memory — see below)
@@ -67,11 +68,18 @@ Kept in mind for config decisions now, not built yet:
   sim/frozen_head_state_park.py  weather, day/night, fog (class `FrozenHeadStatePark`) —
                       named for the race's actual, fixed venue; fine to be park-specific since
                       the whole sim already is (books/loops/cutoffs are Barkley-only rules)
-  agents/brain.py    prompt build, thin complete() wrapper around AsyncAnthropic, parse into Decision
+  agents/participant.py  Participant class (wraps a Persona), prompt build, thin complete()
+                      wrapper around AsyncAnthropic, parses into Decision — renamed from the
+                      originally-planned agents/brain.py once building it made a class the
+                      natural shape (one Participant per runner; see ADR-0005's note)
   agents/personas.py loads persona YAML/JSON files
   agents/personas/   persona data files (name, traits, system prompt template)
-  agents/memory.py   sliding-window history + autocompact summary for prompting
-  db.py              SQLite schema + checkpoint/resume
+  agents/memory.py   sliding-window history (built in v1, see ADR-0005/0006) + autocompact
+                      summary for prompting (autocompact itself still phase-2, see Memory
+                      and persistence below)
+  db.py              SQLite schema + checkpoint/resume (v1's schema is a deliberately
+                      throwaway subset — runner_id + observation/decision JSON blobs — real
+                      checkpoint/resume schema is still phase 2, see Memory and persistence)
 /web                 (later phase)
   src/components/    Map, WatchFace, MonologueFeed, Controls
   src/types/         generated from OpenAPI
@@ -87,9 +95,9 @@ Kept in mind for config decisions now, not built yet:
 
 ```python
 async def think(runner):
+    history = await db.get_recent_turns(runner.conn, runner.runner_id, SLIDING_WINDOW_N)
     async with sem:
-        obs = runner.observe(world)
-        decision = await brain.decide(runner.persona, obs)
+        decision = await runner.participant.decide(obs, history)  # obs passed in, not re-observed
         runner.decision = decision  # applied next tick
 
 async def loop():
@@ -103,11 +111,17 @@ async def loop():
         await asyncio.sleep(1 / speed)
 ```
 
+(Illustrative — see `sim/loop.py` for what's actually built: `think(runner, obs)` takes the
+Observation as an argument rather than calling `runner.observe(world)` itself, since Python
+closures are late-binding and a task created mid-loop must see the Observation from the tick
+that created it, not whatever the loop variable is by the time the task runs.)
+
 ## Data contract
 
 ```python
 class Observation(BaseModel):
     elapsed_min: int
+    clock_time: str        # "Day 2, 3:15 AM" — from start_hour + elapsed_min, not just elapsed
     hr: int
     pace_min_per_km: float
     cadence: int
@@ -152,7 +166,7 @@ The LLM needs continuity — it can't reason about "wtf happened before" without
 - **SQLite is the source of truth.** Every Observation + Decision pair is logged, and a checkpoint is written **on every brain decision** (not on a timer) — this is when there's genuinely new state worth not losing.
 - **Prompting uses a sliding window + autocompact.** Each brain call gets the last **N=10** full Observation/Decision objects verbatim, plus a running summary of everything older. When history exceeds N, an **LLM call** (not code) compresses the aged-out objects into the summary — similar to chatbot context autocompaction. This costs an extra call per compaction but reads as a coherent narrative rather than a stats dump.
 - **Resume-from-checkpoint is handled ourselves** — no LangGraph or external state-machine library. On restart, load the latest checkpoint + summary + last-N window from SQLite and continue.
-- This is built as the phase **right after v1** — v1 itself can run in-memory to keep the first milestone small, but the schema and access patterns should be designed with this follow-up in mind so it's not a rewrite.
+- **What's actually built vs. still phase 2** (per ADR-0005/0007's vertical-slice-first approach): SQLite logging and the sliding-window replay (`db.get_recent_turns` + `agents/memory.py`'s `turns_to_messages`) already exist and work in v1 — the brain genuinely sees its last N turns, not just a fresh Observation every call. What's **not** built yet: the LLM-driven autocompaction call (`agents/memory.py.compact_if_needed` is a loud `NotImplementedError` stub, not a silent no-op), and the real checkpoint/resume schema (`db.py`'s current `turns` table is a deliberately throwaway shape — see its module docstring). Those remain this phase's work. Also: v1's smoke tests used **N=20**, not the N=10 above — revisit before the real run (ADR-0005).
 
 ## Personas
 
@@ -181,6 +195,8 @@ The LLM needs continuity — it can't reason about "wtf happened before" without
 5. **Let it rip.** Polish, more personas, more comedy.
 
 Each numbered phase gets its own plan-mode check-in before code starts, per "How we work together" above.
+
+Per ADR-0007, steps 1–4 each get built as a sped-up, thin, end-to-end slice before the next step starts — not fully fleshed out first. Step 5 ("let it rip") is where the whole chain switches to real scope: 1x realtime, the full 60h cutoff, the full persona roster.
 
 ## Linting & code style
 
