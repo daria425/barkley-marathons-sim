@@ -8,6 +8,7 @@ free function, not a method, since it isn't persona-specific and every Participa
 from anthropic import AsyncAnthropic
 from anthropic.types import ParsedMessage
 
+from agents.memory import format_observation, turns_to_messages
 from agents.personas import Persona
 from models import Decision, Observation
 
@@ -28,40 +29,32 @@ async def complete(system: str, messages: list[dict]) -> ParsedMessage[Decision]
     )
 
 
-def format_observation(obs: Observation) -> str:
-    """Render an Observation as plain text for the user turn. Framed as the runner's own
-    perception ("your body and surroundings"), not as someone speaking to them — the `user`
-    role here just carries this turn's input, per the API's user/assistant/system roles; it
-    doesn't mean a person is addressing the persona. Kept separate from build_prompt so it's
-    easy to unit-test/tweak the wording independently."""
-    lines = [
-        "Your body and surroundings, right now:",
-        f"Elapsed: {obs.elapsed_min} min, loop {obs.loop}, {obs.books_found} books found.",
-        f"HR {obs.hr}, pace {obs.pace_min_per_km:.1f} min/km, cadence {obs.cadence}.",
-        f"You feel: {obs.feel}. Last ate {obs.last_ate_min_ago} min ago.",
-        f"Bearing {obs.bearing_deg:.0f} degrees. Believed position: {obs.gps_guess}.",
-        f"Terrain: {obs.terrain}. Weather: {obs.weather}.",
-    ]
-    return "\n".join(lines)
-
-
 class Participant:
-    """A persona-driven decision-maker. One Participant per runner."""
+    """A persona-driven decision-maker. One Participant per runner.
+
+    Stays DB-agnostic on purpose (matches CLAUDE.md's module split: db.py owns storage,
+    agents/memory.py owns prompt-shaping, this file just calls the LLM) — the caller (loop.py)
+    is responsible for pulling history from db.get_recent_turns and passing it in.
+    """
 
     def __init__(self, persona: Persona):
         self.persona = persona
 
-    def build_prompt(self, obs: Observation) -> list[dict]:
-        """Renders the Observation into the message list. The persona's system prompt is
-        passed separately to complete() — the Anthropic API takes `system` as its own
-        top-level param, not as a message."""
-        return [{"role": "user", "content": format_observation(obs)}]
+    def build_prompt(
+        self, obs: Observation, history: list[tuple[Observation, Decision]]
+    ) -> list[dict]:
+        """Renders prior turns (oldest first) plus the current Observation into the message
+        list. The persona's system prompt is passed separately to complete() — the Anthropic
+        API takes `system` as its own top-level param, not as a message."""
+        return turns_to_messages(history) + [{"role": "user", "content": format_observation(obs)}]
 
-    async def decide(self, obs: Observation) -> Decision | None:
-        """Ask the LLM for a Decision. Returns None on any failure (API error, schema
-        mismatch) — CLAUDE.md: no retries, caller keeps the old decision and logs a funny
-        line instead."""
-        messages = self.build_prompt(obs)
+    async def decide(
+        self, obs: Observation, history: list[tuple[Observation, Decision]] = ()
+    ) -> Decision | None:
+        """Ask the LLM for a Decision, given the current Observation and prior turns. Returns
+        None on any failure (API error, schema mismatch) — CLAUDE.md: no retries, caller keeps
+        the old decision and logs a funny line instead."""
+        messages = self.build_prompt(obs, history)
         try:
             response = await complete(system=self.persona.system_prompt_template, messages=messages)
             return response.parsed_output

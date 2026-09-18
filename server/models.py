@@ -13,6 +13,7 @@ from sim.physiology import PhysiologyState
 
 class Observation(BaseModel):
     elapsed_min: int
+    clock_time: str  # e.g. "Day 2, 3:15 AM" — sim_utils.format_clock_time(start_hour, elapsed_min)
     hr: int
     pace_min_per_km: float
     cadence: int
