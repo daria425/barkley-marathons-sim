@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 class Persona(BaseModel):
     name: str
+    bib_number: int  # real Barkley bibs are odd numbers — see ADR-0010
     traits: list[str]
     system_prompt_template: str
 

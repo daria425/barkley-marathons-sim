@@ -27,6 +27,8 @@ def make_checkpoint(runner_id: str = "test-runner", rng: random.Random | None = 
         believed_pos=(36.11, -84.69),
         loop=2,
         books_found=3,
+        books_collected_this_loop=[0, 2, 5],
+        dist_since_loop_start_km=4.2,
         last_ate_min_ago=15.0,
         last_decision=Decision(
             effort=6,
@@ -111,7 +113,7 @@ def test_get_all_turns_returns_full_unlimited_history_oldest_first():
         runner_id = "test-runner"
         turns = [make_turn(i) for i in range(30)]
         for obs, decision in turns:
-            await db.log_turn(conn, runner_id, obs, decision)
+            await db.log_turn(conn, runner_id, 36.1, -84.7, obs, decision)
 
         all_turns = await db.get_all_turns(conn, runner_id)
 

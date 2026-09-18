@@ -1,19 +1,14 @@
 """Vertical-slice smoke test loop (ADR-0005) — proves Observation -> Decision -> monologue
-works end to end before sim/course.py exists for real.
-
-Course-dependent Observation fields (position, terrain, books, bearing) are hardcoded stubs
-here, not read from a real course — see ADR-0005. Everything else (physiology, weather,
-memory, logging) is the real thing.
+works end to end. Course/books/navigation (sim/course.py, ADR-0010) is the real thing now;
+everything else (physiology, weather, memory, logging) already was.
 """
 
 import asyncio
 import random
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
 import aiosqlite
-import gpxpy
 from langfuse import propagate_attributes
 
 import db
@@ -21,32 +16,26 @@ from agents.memory import SLIDING_WINDOW_N, compact_if_needed
 from agents.participant import Participant
 from agents.personas import load_persona
 from models import Checkpoint, Decision, Observation
+from sim import course as course_mod
 from sim import frozen_head_state_park, physiology
 from sim.sim_utils import format_clock_time
 
-# TICK_DT_MIN lowered from ADR-0005's 0.25 to 0.1 for this run only, to get enough decisions
-# (10 instead of 4) to cross agents/memory.py's SLIDING_WINDOW_N — real wall-clock duration is
-# TOTAL_SIM_MINUTES * 60s regardless of tick granularity, so this still runs in ~1 real minute.
-TICK_DT_MIN = 0.1
-TOTAL_SIM_MINUTES = 1.0
+# Every tick spawns a brain call (no gating by trigger events yet — see CLAUDE.md's "N is not
+# decided yet"), and real wall-clock time between ticks is TICK_DT_MIN * 60s. ADR-0005's
+# original 0.25 (15s/call) restored here; TOTAL_SIM_MINUTES set for 30 calls (~7.5 real min).
+TICK_DT_MIN = 0.25
+TOTAL_SIM_MINUTES = 30 * TICK_DT_MIN
 DB_PATH = "smoke_test.db"
 PERSONA_PATH = Path(__file__).parent.parent / "agents" / "personas" / "barkley_expert.yaml"
-GPX_PATH = Path(__file__).parent.parent / "files" / "Barkley_Challenge_Loop_FKT.gpx"
 
 BASE_HR = 60
 BASE_PACE_MIN_PER_KM = 10.0  # untuned placeholder, see ADR-0004's tuning note
-
-# Stubbed course state (ADR-0005) — replaced once sim/course.py exists for real
-STUB_TERRAIN = "gravel road, gentle climb"
-STUB_LOOP = 1
-STUB_BOOKS_FOUND = 0
-STUB_BEARING_DEG = 0.0
 
 STARTING_DECISION = Decision(
     effort=5,
     eat=False,
     drink=False,
-    bearing_deg=STUB_BEARING_DEG,
+    bearing_deg=0.0,
     rest_min=0,
     quit=False,
     monologue="(standing at the start line)",
@@ -84,6 +73,9 @@ class StateSnapshot:
     start_hour: float
     true_pos: tuple[float, float]
     believed_pos: tuple[float, float]
+    loop: int
+    books_collected: frozenset[int]
+    dist_since_loop_start_km: float
     last_ate_min_ago: float
     rng_state: str
 
@@ -105,6 +97,9 @@ class LoopState:
         believed_pos: tuple[float, float],
         last_ate_min_ago: float,
         rng: random.Random,
+        loop: int = 1,
+        books_collected: frozenset[int] = frozenset(),
+        dist_since_loop_start_km: float = 0.0,
     ):
         self.physio = physio
         self.park = park
@@ -113,26 +108,16 @@ class LoopState:
         self.believed_pos = believed_pos
         self.last_ate_min_ago = last_ate_min_ago
         self.rng = rng
-
-
-@lru_cache(maxsize=1)
-def _start_coords() -> tuple[float, float]:
-    """The start point never changes — cached because the GPX file is ~178k lines and
-    gpxpy.parse() takes >1s to fully parse it just to read the first point. Pre-existing
-    cost, not introduced here; it only became visible once build_initial_state() (and its
-    tests) started calling this more than once per process."""
-    with GPX_PATH.open() as f:
-        gpx = gpxpy.parse(f)
-    point = gpx.tracks[0].segments[0].points[0]
-    return (point.latitude, point.longitude)
+        self.loop = loop
+        self.books_collected = books_collected
+        self.dist_since_loop_start_km = dist_since_loop_start_km
 
 
 def build_initial_state(rng: random.Random, start_hour: float) -> LoopState:
     """Fresh-start LoopState — no checkpoint exists yet for this runner."""
     physio = physiology.initial_state()
     park = frozen_head_state_park.initial_state(start_hour=start_hour, rng=rng)
-    # true_pos == believed_pos for now — no navigation noise until sim/course.py exists
-    start_pos = _start_coords()
+    start_pos = course_mod.start_coords(course_mod.load_course())
     return LoopState(
         physio=physio,
         park=park,
@@ -155,6 +140,9 @@ def restore_state(checkpoint: Checkpoint) -> LoopState:
         believed_pos=checkpoint.believed_pos,
         last_ate_min_ago=checkpoint.last_ate_min_ago,
         rng=db.rng_from_state(checkpoint.rng_state),
+        loop=checkpoint.loop,
+        books_collected=frozenset(checkpoint.books_collected_this_loop),
+        dist_since_loop_start_km=checkpoint.dist_since_loop_start_km,
     )
 
 
@@ -166,7 +154,10 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
     physio.tick() reads state.park.heat_index BEFORE state.park is advanced this tick —
     matches the original inline loop body exactly; physiology sees last tick's environment,
     not this tick's, and changing that ordering would silently change every physiology value
-    from here on."""
+    from here on. Grade is read at state.true_pos before this tick's move, same reasoning."""
+    the_course = course_mod.load_course()
+    grade_pct = course_mod.grade_pct_at(the_course, state.true_pos)
+
     state.physio = physiology.tick(
         state.physio,
         BASE_HR,
@@ -178,13 +169,41 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
     )
     state.park = frozen_head_state_park.tick(state.park, dt_min, state.start_hour, state.rng)
     state.last_ate_min_ago = 0.0 if decision.eat else state.last_ate_min_ago + dt_min
+
+    collapsed = physiology.has_collapsed(state.physio.bonk_push_min)
+    pace = physiology.compute_pace(
+        BASE_PACE_MIN_PER_KM, decision.effort, state.physio.glycogen_pct, collapsed, grade_pct
+    )
+    distance_km = dt_min / pace
+    state.true_pos = course_mod.advance_position(state.true_pos, decision.bearing_deg, distance_km)
+    state.dist_since_loop_start_km += distance_km
+    if course_mod.loop_completed(the_course, state.true_pos, state.dist_since_loop_start_km):
+        state.loop += 1
+        state.dist_since_loop_start_km = 0.0
+        state.books_collected = frozenset()
+    state.books_collected = course_mod.books_found_this_tick(
+        the_course, state.true_pos, state.books_collected
+    )
+    state.believed_pos = course_mod.believed_position(
+        state.true_pos,
+        state.park.fog_pct,
+        state.park.is_daylight,
+        state.physio.elapsed_min,
+        state.rng,
+    )
+
     return _build_observation(
+        the_course,
         state.physio,
         state.park,
         state.start_hour,
         decision,
+        state.true_pos,
         state.believed_pos,
+        state.loop,
+        state.books_collected,
         state.last_ate_min_ago,
+        pace,
     )
 
 
@@ -215,8 +234,10 @@ async def _compact_and_checkpoint(
         start_hour=snapshot.start_hour,
         true_pos=snapshot.true_pos,
         believed_pos=snapshot.believed_pos,
-        loop=STUB_LOOP,
-        books_found=STUB_BOOKS_FOUND,
+        loop=snapshot.loop,
+        books_found=len(snapshot.books_collected),
+        books_collected_this_loop=sorted(snapshot.books_collected),
+        dist_since_loop_start_km=snapshot.dist_since_loop_start_km,
         last_ate_min_ago=snapshot.last_ate_min_ago,
         last_decision=decision,
         rng_state=snapshot.rng_state,
@@ -237,13 +258,21 @@ async def think(runner: RunnerLoop, obs: Observation, snapshot: StateSnapshot) -
     propagate through the un-awaited asyncio.create_task() and crash the entire race loop at
     the final asyncio.gather().
     """
+    true_lat = snapshot.true_pos[0]
+    true_lon = snapshot.true_pos[1]
     try:
         history = await db.get_recent_turns(runner.conn, runner.runner_id, SLIDING_WINDOW_N)
         with propagate_attributes(session_id=runner.runner_id, tags=["barkley-smoke-test"]):
             async with runner.sem:
                 outcome = await runner.participant.decide(obs, history, runner.summary)
         await db.log_turn(
-            runner.conn, runner.runner_id, obs, outcome.decision, outcome.failure_reason
+            runner.conn,
+            runner.runner_id,
+            true_lat,
+            true_lon,
+            obs,
+            outcome.decision,
+            outcome.failure_reason,
         )
         if outcome.decision is not None:
             await _compact_and_checkpoint(runner, obs, outcome.decision, snapshot)
@@ -255,7 +284,7 @@ async def think(runner: RunnerLoop, obs: Observation, snapshot: StateSnapshot) -
         reason = f"{type(e).__name__}: {e}"
         print(f"[{obs.clock_time}] ...{runner.runner_id} mumbles incoherently... ({reason})")
         try:
-            await db.log_turn(runner.conn, runner.runner_id, obs, None, reason)
+            await db.log_turn(runner.conn, runner.runner_id, true_lat, true_lon, obs, None, reason)
         except Exception:
             pass  # persisting the failure failing too shouldn't crash the tick loop either
         return
@@ -267,17 +296,19 @@ async def think(runner: RunnerLoop, obs: Observation, snapshot: StateSnapshot) -
 
 
 def _build_observation(
+    course: course_mod.Course,
     physio: physiology.PhysiologyState,
     park: frozen_head_state_park.FrozenHeadStatePark,
     start_hour: float,
     decision: Decision,
+    true_pos: tuple[float, float],
     believed_pos: tuple[float, float],
+    loop: int,
+    books_collected: frozenset[int],
     last_ate_min_ago: float,
+    pace: float,
 ) -> Observation:
     collapsed = physiology.has_collapsed(physio.bonk_push_min)
-    pace = physiology.compute_pace(
-        BASE_PACE_MIN_PER_KM, decision.effort, physio.glycogen_pct, collapsed
-    )
     return Observation(
         elapsed_min=round(physio.elapsed_min),
         clock_time=format_clock_time(start_hour, physio.elapsed_min),
@@ -288,15 +319,19 @@ def _build_observation(
         last_ate_min_ago=round(last_ate_min_ago),
         bearing_deg=decision.bearing_deg,
         gps_guess=believed_pos,
-        terrain=STUB_TERRAIN,
+        terrain=course_mod.terrain_at(course, true_pos),
         weather=park.weather,
-        books_found=STUB_BOOKS_FOUND,
-        loop=STUB_LOOP,
+        books_found=len(books_collected),
+        loop=loop,
         hallucination=None,
     )
 
 
-async def run() -> None:
+async def run(speed: float = 1.0) -> None:
+    """speed=1.0 is real Barkley pacing (CLAUDE.md: "the eventual real way to run this is at
+    1x realtime... 60x/600x speed is for iterating during development, not the intended
+    experience") — higher values only compress wall-clock time between ticks, never sim time
+    itself (TICK_DT_MIN, physiology, everything else is unchanged)."""
     conn = await db.init_db(DB_PATH)
     runner = RunnerLoop(Participant(load_persona(PERSONA_PATH)), conn, asyncio.Semaphore(5))
 
@@ -312,7 +347,8 @@ async def run() -> None:
         )
     else:
         rng = random.Random()
-        start_hour = rng.uniform(0.0, 12.0)  # Barkley's horn blows any time midnight-noon
+        # Barkley's horn blows any time midnight-noon
+        start_hour = rng.uniform(0.0, 12.0)
         state = build_initial_state(rng, start_hour)
         print(f"Starting {runner.runner_id} fresh, start_hour={start_hour:.2f}")
 
@@ -330,12 +366,15 @@ async def run() -> None:
             start_hour=state.start_hour,
             true_pos=state.true_pos,
             believed_pos=state.believed_pos,
+            loop=state.loop,
+            books_collected=state.books_collected,
+            dist_since_loop_start_km=state.dist_since_loop_start_km,
             last_ate_min_ago=state.last_ate_min_ago,
             rng_state=db.serialize_rng_state(state.rng),
         )
         print(f"[{obs.clock_time}] HR={obs.hr} pace={obs.pace_min_per_km:.1f} feel={obs.feel}")
         tasks.append(asyncio.create_task(think(runner, obs, snapshot)))
-        await asyncio.sleep(TICK_DT_MIN * 60)
+        await asyncio.sleep(TICK_DT_MIN * 60 / speed)
 
     await asyncio.gather(*tasks)
     await conn.close()
@@ -352,8 +391,17 @@ if __name__ == "__main__":
         "of resuming a checkpoint from a previous run (dev convenience — resuming-if-present "
         "is the correct behavior otherwise, see ADR-0008/ADR-0009).",
     )
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="Wall-clock speedup (e.g. 60 = 1 sim-minute every real second). Dev convenience "
+        "only — sim time itself (TICK_DT_MIN, physiology) never changes; see CLAUDE.md's "
+        "'Speed multiplier is a dev convenience, not the target mode.' Default 1.0 = real "
+        "Barkley pacing.",
+    )
     args = parser.parse_args()
     if args.fresh:
         Path(DB_PATH).unlink(missing_ok=True)
 
-    asyncio.run(run())
+    asyncio.run(run(speed=args.speed))

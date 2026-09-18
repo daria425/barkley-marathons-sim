@@ -43,6 +43,9 @@ def _snapshot(state) -> StateSnapshot:
         start_hour=state.start_hour,
         true_pos=state.true_pos,
         believed_pos=state.believed_pos,
+        loop=state.loop,
+        books_collected=state.books_collected,
+        dist_since_loop_start_km=state.dist_since_loop_start_km,
         last_ate_min_ago=state.last_ate_min_ago,
         rng_state=db.serialize_rng_state(state.rng),
     )

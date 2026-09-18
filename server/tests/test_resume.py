@@ -12,8 +12,6 @@ import random
 import db
 from models import Checkpoint, Decision
 from sim.loop import (
-    STUB_BOOKS_FOUND,
-    STUB_LOOP,
     TICK_DT_MIN,
     advance_tick,
     build_initial_state,
@@ -55,8 +53,10 @@ def _make_checkpoint(state, last_decision: Decision) -> Checkpoint:
         start_hour=state.start_hour,
         true_pos=state.true_pos,
         believed_pos=state.believed_pos,
-        loop=STUB_LOOP,
-        books_found=STUB_BOOKS_FOUND,
+        loop=state.loop,
+        books_found=len(state.books_collected),
+        books_collected_this_loop=sorted(state.books_collected),
+        dist_since_loop_start_km=state.dist_since_loop_start_km,
         last_ate_min_ago=state.last_ate_min_ago,
         last_decision=last_decision,
         rng_state=db.serialize_rng_state(state.rng),
@@ -85,6 +85,11 @@ def test_resume_continues_bit_exactly_from_a_checkpoint():
     assert resumed_state.physio == reference_state.physio
     assert resumed_state.park == reference_state.park
     assert resumed_state.last_ate_min_ago == reference_state.last_ate_min_ago
+    assert resumed_state.true_pos == reference_state.true_pos
+    assert resumed_state.believed_pos == reference_state.believed_pos
+    assert resumed_state.loop == reference_state.loop
+    assert resumed_state.books_collected == reference_state.books_collected
+    assert resumed_state.dist_since_loop_start_km == reference_state.dist_since_loop_start_km
     assert resumed_future_draws == reference_future_draws
 
 

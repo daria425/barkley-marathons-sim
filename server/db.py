@@ -19,6 +19,8 @@ CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     runner_id TEXT NOT NULL,
+    true_lat REAL NOT NULL,
+    true_lon REAL NOT NULL,
     elapsed_min REAL NOT NULL,
     observation_json TEXT NOT NULL,
     decision_json TEXT,
@@ -71,6 +73,8 @@ def rng_from_state(state_json: str) -> random.Random:
 async def log_turn(
     conn: aiosqlite.Connection,
     runner_id: str,
+    true_lat: float,
+    true_lon: float,
     obs: Observation,
     decision: Decision | None,
     failure_reason: str | None = None,
@@ -88,10 +92,12 @@ async def log_turn(
     thinks than a 0.25-precision float would.
     """
     await conn.execute(
-        "INSERT INTO turns (runner_id, elapsed_min, observation_json, decision_json, "
-        "failure_reason) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO turns (runner_id, true_lat, true_lon, elapsed_min, observation_json, "
+        "decision_json, failure_reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             runner_id,
+            true_lat,
+            true_lon,
             round(obs.elapsed_min),
             obs.model_dump_json(),
             decision.model_dump_json() if decision else None,

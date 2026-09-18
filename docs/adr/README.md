@@ -11,3 +11,4 @@
 | [0007](0007-vertical-slice-first-across-all-phases.md)    | Build a sped-up vertical slice through every phase before "letting it rip" | accepted | 2026-09-18 |
 | [0008](0008-deterministic-code-based-memory-compaction.md) | Deterministic code-based memory compaction, not an LLM summarization call | accepted | 2026-09-18 |
 | [0009](0009-test-resume-with-scripted-decisions.md) | Test resume-from-checkpoint with scripted decisions, not the live LLM | accepted | 2026-09-18 |
+| [0010](0010-free-2d-navigation-and-book-scoping.md) | Free 2D navigation in `sim/course.py`, and books as a proximity counter | accepted | 2026-09-18 |

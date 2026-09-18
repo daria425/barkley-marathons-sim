@@ -18,7 +18,9 @@ from models import Decision, Observation
 
 
 def _persona() -> Persona:
-    return Persona(name="Test", traits=[], system_prompt_template="You are a test runner.")
+    return Persona(
+        name="Test", bib_number=1, traits=[], system_prompt_template="You are a test runner."
+    )
 
 
 def _obs() -> Observation:

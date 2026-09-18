@@ -43,6 +43,7 @@ class RunnerState(BaseModel):
     rather than re-declaring its fields."""
 
     persona_name: str
+    bib_number: int  # real Barkley bibs are odd numbers — see ADR-0010
     physiology: PhysiologyState
     true_pos: tuple[float, float]
     believed_pos: tuple[float, float]  # NOISY — see CLAUDE.md's "true vs believed position"
@@ -72,6 +73,8 @@ class Checkpoint(BaseModel):
     believed_pos: tuple[float, float]
     loop: int
     books_found: int
+    books_collected_this_loop: list[int] = []  # ADR-0010: resets each loop, real Barkley rule
+    dist_since_loop_start_km: float = 0.0  # ADR-0010's loop-completion heuristic
     last_ate_min_ago: float
     last_decision: Decision
     rng_state: str
