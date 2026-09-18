@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS turns (
     elapsed_min REAL NOT NULL,
     observation_json TEXT NOT NULL,
     decision_json TEXT,
+    failure_reason TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 )
 """
@@ -68,23 +69,33 @@ def rng_from_state(state_json: str) -> random.Random:
 
 
 async def log_turn(
-    conn: aiosqlite.Connection, runner_id: str, obs: Observation, decision: Decision | None
+    conn: aiosqlite.Connection,
+    runner_id: str,
+    obs: Observation,
+    decision: Decision | None,
+    failure_reason: str | None = None,
 ) -> None:
-    """decision may be None — a failed brain call still gets logged (with a null decision)
-    so the smoke test shows how often parsing/API failures happen, not just successes.
+    """decision may be None — a failed brain call still gets logged (with a null decision) so
+    the smoke test shows how often parsing/API failures happen, not just successes.
+
+    failure_reason persists WHY (e.g. "RuntimeError: simulated API outage") — for us, never
+    shown to the LLM (get_recent_turns/get_all_turns only ever select decision_json IS NOT
+    NULL rows). Before this, the only record of a failure was a print() line, gone the moment
+    the process exited.
 
     elapsed_min is rounded to the nearest whole minute before storage — memory.py replays
     this back to the LLM, and "about 4 minutes in" reads more like how a runner actually
     thinks than a 0.25-precision float would.
     """
     await conn.execute(
-        "INSERT INTO turns (runner_id, elapsed_min, observation_json, decision_json) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT INTO turns (runner_id, elapsed_min, observation_json, decision_json, "
+        "failure_reason) VALUES (?, ?, ?, ?, ?)",
         (
             runner_id,
             round(obs.elapsed_min),
             obs.model_dump_json(),
             decision.model_dump_json() if decision else None,
+            failure_reason,
         ),
     )
     await conn.commit()
@@ -134,6 +145,22 @@ async def get_all_turns(
         (Observation.model_validate_json(obs_json), Decision.model_validate_json(dec_json))
         for obs_json, dec_json in rows
     ]
+
+
+async def get_failures(
+    conn: aiosqlite.Connection, runner_id: str, limit: int = 50
+) -> list[tuple[int, str | None]]:
+    """(elapsed_min, failure_reason) for every failed turn, most recent first — for us to
+    actually look at ("how often and why is this breaking"), not for prompt replay. A row can
+    have failure_reason=None if it failed before ADR-0008's diagnostic existed, or if
+    think()'s outer except couldn't determine a reason."""
+    cursor = await conn.execute(
+        "SELECT elapsed_min, failure_reason FROM turns "
+        "WHERE runner_id = ? AND decision_json IS NULL "
+        "ORDER BY elapsed_min DESC LIMIT ?",
+        (runner_id, limit),
+    )
+    return await cursor.fetchall()
 
 
 async def save_checkpoint(conn: aiosqlite.Connection, checkpoint: Checkpoint) -> None:

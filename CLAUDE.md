@@ -74,12 +74,11 @@ Kept in mind for config decisions now, not built yet:
                       natural shape (one Participant per runner; see ADR-0005's note)
   agents/personas.py loads persona YAML/JSON files
   agents/personas/   persona data files (name, traits, system prompt template)
-  agents/memory.py   sliding-window history (built in v1, see ADR-0005/0006) + autocompact
-                      summary for prompting (autocompact itself still phase-2, see Memory
-                      and persistence below)
-  db.py              SQLite schema + checkpoint/resume (v1's schema is a deliberately
-                      throwaway subset — runner_id + observation/decision JSON blobs — real
-                      checkpoint/resume schema is still phase 2, see Memory and persistence)
+  agents/memory.py   sliding-window history (built in v1, see ADR-0005/0006) + code-based
+                      compaction (ADR-0008, see Memory and persistence below)
+  db.py              SQLite: the throwaway `turns` log (runner_id + observation/decision JSON
+                      blobs, see its module docstring) plus the real `checkpoints` table and
+                      resume mechanism (ADR-0008/0009, see Memory and persistence)
 /web                 (later phase)
   src/components/    Map, WatchFace, MonologueFeed, Controls
   src/types/         generated from OpenAPI
@@ -91,7 +90,7 @@ Kept in mind for config decisions now, not built yet:
 - Each runner keeps executing its **last decision** until a new one arrives.
 - Brain calls fire async via `asyncio.create_task`, either every N sim-minutes or on trigger events: fall, lost, bonk, book found, loop complete, quit consideration. **N is not decided yet** — pick it during Phase 1 planning, not before.
 - Cap concurrency with `asyncio.Semaphore(5)` — built now even though v1 has one runner, so multi-persona later is just raising N, not re-architecting.
-- If the LLM call fails or returns invalid JSON, catch the error, **keep the old decision**, and log a funny line ("runner mumbles incoherently"). No retries — try again on the next scheduled thought.
+- If the LLM call fails or returns invalid JSON, catch the error, **keep the old decision**, and log a funny line ("runner mumbles incoherently"). No retries — try again on the next scheduled thought. This is also **persisted, not just printed**: `agents/participant.py`'s `decide()` returns a `BrainOutcome(decision, failure_reason)`, and `db.py`'s `turns.failure_reason` column records why (for us to debug later — `db.get_failures()` — never shown to the LLM; `get_recent_turns`/`get_all_turns` still only ever select rows with a real decision).
 
 ```python
 async def think(runner):
@@ -166,7 +165,7 @@ The LLM needs continuity — it can't reason about "wtf happened before" without
 - **SQLite is the source of truth.** Every Observation + Decision pair is logged, and a checkpoint is written **on every brain decision** (not on a timer) — this is when there's genuinely new state worth not losing.
 - **Prompting uses a sliding window + autocompact.** Each brain call gets the last **N=10** full Observation/Decision objects verbatim, plus a running summary of everything older. When history exceeds N, compaction folds the oldest aged-out turns into the summary. **Per ADR-0008 (supersedes the original "LLM call, not code" line below), this is a deterministic, code-based, templated compaction** — not an LLM call — precisely because this subsystem's job is surviving a 60-hour run without losing state, and a second untestable LLM failure surface works against that. It also unlocks ADR-0001's deferred hallucination mechanic: a structured, code-owned summary can be deliberately degraded (dropped/reordered/misattributed facts, faded monologue lines) as sleep debt rises, which an LLM-generated summary couldn't be made to do on purpose.
 - **Resume-from-checkpoint is handled ourselves** — no LangGraph or external state-machine library. On restart, load the latest checkpoint (see ADR-0008's `Checkpoint` schema — includes `rng.getstate()` for bit-exact resume) + summary + last-N window from SQLite and continue.
-- **What's actually built vs. still phase 2** (per ADR-0005/0007's vertical-slice-first approach): SQLite logging and the sliding-window replay (`db.get_recent_turns` + `agents/memory.py`'s `turns_to_messages`) already exist and work in v1 — the brain genuinely sees its last N turns, not just a fresh Observation every call. What's **not** built yet: the code-based autocompaction (`agents/memory.py.compact_if_needed` is currently a loud `NotImplementedError` stub, not a silent no-op — ADR-0008 replaces its LLM-call design, not its trigger condition), and the real checkpoint/resume schema (`db.py`'s current `turns` table is a deliberately throwaway shape — see its module docstring; the new `checkpoints` table from ADR-0008 is separate and additive). Those remain this phase's work, built as an isolated, unit-tested slice before wiring into `sim/loop.py` (ADR-0007). Also: v1's smoke tests used **N=20**, not the N=10 above — revisit before the real run (ADR-0005).
+- **What's actually built vs. still phase 2** (per ADR-0005/0007's vertical-slice-first approach): SQLite logging, the sliding-window replay (`db.get_recent_turns` + `agents/memory.py`'s `turns_to_messages`), code-based compaction (`agents/memory.py.compact_if_needed`, ADR-0008), and checkpoint/resume are all wired in and working end to end: `sim/loop.py`'s `run()` calls `db.load_checkpoint` on startup and resumes from it (via `restore_state`, bit-exact including `rng` state) when one exists, or starts fresh otherwise — verified both by `tests/test_resume.py` (a scripted-decision reference-vs-resume comparison, ADR-0009) and by running the smoke test twice against the same DB and watching `elapsed_min`/turn counts continue rather than reset. `sim/loop.py --fresh` deletes the smoke-test DB first, for dev iteration that doesn't want to accidentally resume a stale checkpoint. `db.py`'s `turns` table stays a deliberately throwaway shape (see its module docstring); the `checkpoints` table (ADR-0008) is the real, separate, additive mechanism. **Still open**: an actual kill-mid-process integration test (ADR-0009's tests exercise the pure resume logic directly, not the live async `think()`/`asyncio.create_task` path under a real process kill). Also: v1's smoke tests use **N=5** (lowered further from the earlier N=20 to actually exercise compaction), not the real-race N=10 above — revisit both before the real run (ADR-0005).
 
 ## Personas
 

@@ -10,8 +10,10 @@ from dataclasses import dataclass
 
 from models import Decision, Observation
 
-# CLAUDE.md's real-race spec says N=10; smoke test uses 20, revisit later
-SLIDING_WINDOW_N = 20
+# CLAUDE.md's real-race spec says N=10; lowered further to 5 for now so ADR-0008's compaction
+# path actually exercises within the short dev-speed smoke test — single source of truth for
+# the window size, not overridden per-caller. Revisit before the real run (ADR-0005).
+SLIDING_WINDOW_N = 5
 
 # Mirror physiology.describe_feel's exact strings (sim/physiology.py) so segment extraction can
 # rank severity. Not imported directly — Observation.feel is a free-text field (hallucinations
