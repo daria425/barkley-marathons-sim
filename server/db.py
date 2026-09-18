@@ -8,9 +8,12 @@ runner_id is stored now even though v1 has exactly one runner, so multi-persona 
 WHERE clause, not a schema change (same reasoning as the concurrency semaphore in loop.py).
 """
 
+import json
+import random
+
 import aiosqlite
 
-from models import Decision, Observation
+from models import Checkpoint, Decision, Observation
 
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS turns (
@@ -23,14 +26,45 @@ CREATE TABLE IF NOT EXISTS turns (
 )
 """
 
+# ADR-0008's real checkpoint/resume schema — separate from `turns` above (which stays the
+# throwaway append-only log). One row per runner, replaced wholesale on every brain decision.
+CREATE_CHECKPOINTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS checkpoints (
+    runner_id TEXT PRIMARY KEY,
+    checkpoint_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
 # TO DO pool connections when we have multiple runners if needed
 
 
 async def init_db(path: str) -> aiosqlite.Connection:
     conn = await aiosqlite.connect(path)
     await conn.execute(CREATE_TABLE_SQL)
+    await conn.execute(CREATE_CHECKPOINTS_TABLE_SQL)
     await conn.commit()
     return conn
+
+
+def serialize_rng_state(rng: random.Random) -> str:
+    """random.getstate() returns (version, internal_state, gauss_next), where internal_state
+    is a 625-tuple of ints. A bare json.dumps/loads round-trip turns tuples into lists, and
+    random.setstate() requires the internal_state to be an actual tuple — passing it a list
+    raises. This helper (and deserialize_rng_state below) does the tuple<->list conversion
+    explicitly so callers never hit that silently-wrong-shape bug."""
+    return json.dumps(rng.getstate())
+
+
+def deserialize_rng_state(state_json: str) -> tuple:
+    version, internal_state, gauss_next = json.loads(state_json)
+    return (version, tuple(internal_state), gauss_next)
+
+
+def rng_from_state(state_json: str) -> random.Random:
+    rng = random.Random()
+    rng.setstate(deserialize_rng_state(state_json))
+    return rng
 
 
 async def log_turn(
@@ -82,3 +116,43 @@ async def count_turns(conn: aiosqlite.Connection, runner_id: str) -> int:
     )
     (count,) = await cursor.fetchone()
     return count
+
+
+async def get_all_turns(
+    conn: aiosqlite.Connection, runner_id: str
+) -> list[tuple[Observation, Decision]]:
+    """The FULL turn history for this runner, oldest-first, no LIMIT — unlike
+    get_recent_turns, this is what agents/memory.py's compact_if_needed (ADR-0008) needs to
+    find the turns that have aged out of the last-N window."""
+    cursor = await conn.execute(
+        "SELECT observation_json, decision_json FROM turns "
+        "WHERE runner_id = ? AND decision_json IS NOT NULL ORDER BY elapsed_min ASC",
+        (runner_id,),
+    )
+    rows = await cursor.fetchall()
+    return [
+        (Observation.model_validate_json(obs_json), Decision.model_validate_json(dec_json))
+        for obs_json, dec_json in rows
+    ]
+
+
+async def save_checkpoint(conn: aiosqlite.Connection, checkpoint: Checkpoint) -> None:
+    """Upsert — ADR-0008's checkpoint is one row per runner_id, replaced wholesale on every
+    brain decision, not appended like `turns`."""
+    await conn.execute(
+        "INSERT INTO checkpoints (runner_id, checkpoint_json, updated_at) "
+        "VALUES (?, ?, datetime('now')) "
+        "ON CONFLICT(runner_id) DO UPDATE SET "
+        "checkpoint_json = excluded.checkpoint_json, updated_at = excluded.updated_at",
+        (checkpoint.runner_id, checkpoint.model_dump_json()),
+    )
+    await conn.commit()
+
+
+async def load_checkpoint(conn: aiosqlite.Connection, runner_id: str) -> Checkpoint | None:
+    """None means no checkpoint exists yet for this runner — a fresh start, not a resume."""
+    cursor = await conn.execute(
+        "SELECT checkpoint_json FROM checkpoints WHERE runner_id = ?", (runner_id,)
+    )
+    row = await cursor.fetchone()
+    return Checkpoint.model_validate_json(row[0]) if row else None

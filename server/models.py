@@ -53,6 +53,32 @@ class RunnerState(BaseModel):
     last_decision: Decision | None = None
 
 
+class Checkpoint(BaseModel):
+    """Full resumable state for one runner — see ADR-0008. Rewritten wholesale (INSERT OR
+    REPLACE, keyed by runner_id) on every brain decision, unlike the append-only `turns` log.
+
+    `rng_state` must round-trip exactly through db.py's rng (de)serialization helpers, not bare
+    json.dumps/loads — see their docstrings for why. Bit-exact RNG resume is a deliberate
+    choice (not just convenience): a checkpoint that let weather/noise diverge after a crash
+    would make "resume" produce a provably different race, not a continuation of the same one.
+    """
+
+    runner_id: str
+    elapsed_min: float
+    physiology: PhysiologyState
+    environment: FrozenHeadStatePark
+    start_hour: float
+    true_pos: tuple[float, float]
+    believed_pos: tuple[float, float]
+    loop: int
+    books_found: int
+    last_ate_min_ago: float
+    last_decision: Decision
+    rng_state: str
+    summary_text: str
+    summary_covers_up_to_elapsed_min: int
+
+
 class RaceState(BaseModel):
     """The full broadcast snapshot: sim clock, environment, every runner.
     Named RaceState (not WorldState) to avoid colliding with FrozenHeadStatePark,
