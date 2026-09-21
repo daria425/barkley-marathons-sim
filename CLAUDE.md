@@ -28,9 +28,9 @@ This is a collaboration, not a hand-the-keys-over build. Specifically:
 
 **Right after v1**: SQLite-backed checkpoint/resume becomes load-bearing (not just nice-to-have logging) — see "Memory and persistence" below.
 
-**Later phase**: multiple competing personas (5–10 runners).
+**Next phase**: the full frontend (MapLibre map, ghost dots, watch cards, monologue feed, speed controls, Taps-on-quit) — see Frontend section, built against the now-landed API/WS contract (ADR-0011).
 
-**Stretch / documented but not built yet**: the full frontend (MapLibre map, ghost dots, watch cards, monologue feed, speed controls, Taps-on-quit) — see Frontend section, kept here so the shape is agreed even though it's not in scope yet.
+**After that**: multiple competing personas (5–10 runners), reordered after the frontend — see Build order.
 
 ## Stack
 
@@ -189,8 +189,8 @@ The LLM needs continuity — it can't reason about "wtf happened before" without
 
 1. **v1 — one runner, full loop, no frontend.** Weather/environment sim → physiology → course/books/noisy-position navigation → wire in the one LLM persona (direct AsyncAnthropic via `complete()`, Langfuse traced). Verify via logs/SQLite/API, not a UI. Physiology gets property-based unit tests before the LLM is plugged in; tune against reference data once behavior looks right.
 2. **Persistence + resume.** SQLite logging, checkpoint-per-decision, sliding-window + code-based autocompacted memory (ADR-0008), resume-on-restart.
-3. **Multi-persona.** 5–10 personas racing concurrently, using the concurrency pattern already built in v1.
-4. **Frontend.** Map, watch cards, monologue feed, controls — the experience described above, built against the by-then-stable API/WS contract.
+3. **Frontend.** Map, watch cards, monologue feed, controls — the experience described above, built against the by-then-stable API/WS contract. Moved ahead of multi-persona (ADR-0011's WS wiring landed and is worth a real consumer before multiplying runners on top of it; the concurrency pattern for multi-persona is already built and doesn't get more urgent by waiting).
+4. **Multi-persona.** 5–10 personas racing concurrently, using the concurrency pattern already built in v1.
 5. **Let it rip.** Polish, more personas, more comedy.
 
 Each numbered phase gets its own plan-mode check-in before code starts, per "How we work together" above.

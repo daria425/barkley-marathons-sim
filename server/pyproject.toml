@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
     "anthropic>=1.6.0",
+    "fastapi[standard]>=0.141.1",
     "gpxpy>=1.6.2",
     "haversine>=2.9.0",
     "langfuse>=4.15.4",

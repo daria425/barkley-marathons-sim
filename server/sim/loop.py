@@ -5,6 +5,7 @@ everything else (physiology, weather, memory, logging) already was.
 
 import asyncio
 import random
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,10 +16,15 @@ import db
 from agents.memory import SLIDING_WINDOW_N, compact_if_needed
 from agents.participant import Participant
 from agents.personas import load_persona
-from models import Checkpoint, Decision, Observation
+from models import Checkpoint, Decision, Observation, RaceState, RunnerState
 from sim import course as course_mod
 from sim import frozen_head_state_park, physiology
 from sim.sim_utils import format_clock_time
+
+# Called once per tick with the current RaceState, and again (with an updated RunnerState
+# after a fresh Decision) whenever a brain call lands — main.py wires this to its WS
+# broadcaster. None (the default) keeps the CLI/smoke-test/test_resume.py path unaffected.
+OnUpdate = Callable[[RaceState], Awaitable[None]]
 
 # Every tick spawns a brain call (no gating by trigger events yet — see CLAUDE.md's "N is not
 # decided yet"), and real wall-clock time between ticks is TICK_DT_MIN * 60s. ADR-0005's
@@ -247,7 +253,9 @@ async def _compact_and_checkpoint(
     await db.save_checkpoint(runner.conn, checkpoint)
 
 
-async def think(runner: RunnerLoop, obs: Observation, snapshot: StateSnapshot) -> None:
+async def think(
+    runner: RunnerLoop, obs: Observation, snapshot: StateSnapshot, on_update: OnUpdate | None = None
+) -> None:
     """obs/snapshot are passed as arguments (not closed over) so each task sees the state from
     the tick that created it, not whatever the loop variables happen to be by the time this
     runs — Python's closures are late-binding, and the loop reassigns them every tick.
@@ -293,6 +301,36 @@ async def think(runner: RunnerLoop, obs: Observation, snapshot: StateSnapshot) -
         return
     print(f"[{obs.clock_time}] {runner.runner_id}: {outcome.decision.monologue!r}")
     runner.decision = outcome.decision
+    if on_update is not None:
+        runner_state = _build_runner_state(runner, obs, snapshot, outcome.decision)
+        await on_update(_build_race_state(runner_state, snapshot))
+
+
+def _build_runner_state(
+    runner: RunnerLoop, obs: Observation, snapshot: StateSnapshot, decision: Decision
+) -> RunnerState:
+    return RunnerState(
+        persona_name=runner.participant.persona.name,
+        bib_number=runner.participant.persona.bib_number,
+        physiology=snapshot.physio,
+        true_pos=snapshot.true_pos,
+        believed_pos=snapshot.believed_pos,
+        loop=snapshot.loop,
+        books_found=len(snapshot.books_collected),
+        pace_min_per_km=obs.pace_min_per_km,
+        feel=obs.feel,
+        last_decision=decision,
+    )
+
+
+def _build_race_state(runner_state: RunnerState, snapshot: StateSnapshot) -> RaceState:
+    # v1 is single-runner (CLAUDE.md), so a one-entry dict — multi-persona (phase 3) just
+    # means the caller merges more runners' states into the same broadcast.
+    return RaceState(
+        elapsed_min=snapshot.physio.elapsed_min,
+        environment=snapshot.park,
+        runners={runner_state.persona_name: runner_state},
+    )
 
 
 def _build_observation(
@@ -327,11 +365,15 @@ def _build_observation(
     )
 
 
-async def run(speed: float = 1.0) -> None:
+async def run(speed: float = 1.0, on_update: OnUpdate | None = None) -> None:
     """speed=1.0 is real Barkley pacing (CLAUDE.md: "the eventual real way to run this is at
     1x realtime... 60x/600x speed is for iterating during development, not the intended
     experience") — higher values only compress wall-clock time between ticks, never sim time
-    itself (TICK_DT_MIN, physiology, everything else is unchanged)."""
+    itself (TICK_DT_MIN, physiology, everything else is unchanged).
+
+    on_update, when given, is awaited once per tick with the current RaceState (main.py wires
+    this to its WS broadcaster) and again whenever a brain call lands mid-tick (see think()).
+    Default None keeps the CLI/smoke-test/test_resume.py path unaffected."""
     conn = await db.init_db(DB_PATH)
     runner = RunnerLoop(Participant(load_persona(PERSONA_PATH)), conn, asyncio.Semaphore(5))
 
@@ -373,7 +415,10 @@ async def run(speed: float = 1.0) -> None:
             rng_state=db.serialize_rng_state(state.rng),
         )
         print(f"[{obs.clock_time}] HR={obs.hr} pace={obs.pace_min_per_km:.1f} feel={obs.feel}")
-        tasks.append(asyncio.create_task(think(runner, obs, snapshot)))
+        if on_update is not None:
+            runner_state = _build_runner_state(runner, obs, snapshot, decision)
+            await on_update(_build_race_state(runner_state, snapshot))
+        tasks.append(asyncio.create_task(think(runner, obs, snapshot, on_update)))
         await asyncio.sleep(TICK_DT_MIN * 60 / speed)
 
     await asyncio.gather(*tasks)
