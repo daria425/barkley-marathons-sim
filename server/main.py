@@ -9,15 +9,17 @@ docstring for why (agents/participant.py builds its AsyncAnthropic client at imp
 import asyncio
 import os
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from observability import setup_observability
 
 setup_observability()
 
-from models import RaceState  # noqa: E402 (must follow setup_observability(), see docstring)
-from sim.loop import run  # noqa: E402 (must follow setup_observability(), see docstring)
+# noqa: E402 below — must follow setup_observability(), see its docstring
+from models import CourseBook, CourseGeometry, RaceState  # noqa: E402
+from sim import course as course_mod  # noqa: E402
+from sim.loop import run  # noqa: E402
 
 app = FastAPI()
 
@@ -62,6 +64,35 @@ async def run_ultra_sim(speed: float = 1.0):
         return {"status": "already running"}
     _run_task = asyncio.create_task(run(speed=speed, on_update=_broadcast))
     return {"status": "started", "speed": speed}
+
+
+@app.get("/course", response_model=CourseGeometry)
+async def course_geometry():
+    """Static course shape for the frontend map — trail polyline + book locations. Not part
+    of the WS stream: sim.course.load_course() is lru_cached and doesn't change mid-race, so
+    the frontend fetches this once rather than getting it re-broadcast every tick."""
+    course = course_mod.load_course()
+    return CourseGeometry(
+        points=[(p.lat, p.lon) for p in course.points],
+        books=[CourseBook(index=b.index, name=b.name, lat=b.lat, lon=b.lon) for b in course.books],
+    )
+
+
+_SCHEMA_MODELS = {"race-state": RaceState}
+
+
+@app.get("/schema", response_model=RaceState)
+async def schema_export(model: str):
+    """Schema-export-only — never actually returns 200. FastAPI doesn't document WebSocket
+    payloads in /openapi.json at all, and RaceState only ever flows over /ws, so without this
+    route openapi-typescript would generate nothing for it (ADR-0011/CLAUDE.md's Type sync
+    note: never hand-write duplicate TS types). `response_model=RaceState` is what puts its
+    schema into /openapi.json's components — the handler itself is never meant to succeed.
+    `model` is a query param (not a path segment) so future WS-only models can reuse this
+    same route instead of getting one route each."""
+    if model not in _SCHEMA_MODELS:
+        raise HTTPException(status_code=404, detail=f"unknown schema model: {model!r}")
+    raise HTTPException(status_code=404, detail="schema-export endpoint; not for runtime use")
 
 
 @app.websocket("/ws")

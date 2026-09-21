@@ -90,3 +90,19 @@ class RaceState(BaseModel):
     elapsed_min: float
     environment: FrozenHeadStatePark
     runners: dict[str, RunnerState]  # keyed by persona_name, for v1's single runner too
+
+
+class CourseBook(BaseModel):
+    index: int
+    name: str
+    lat: float
+    lon: float
+
+
+class CourseGeometry(BaseModel):
+    """The static course shape (trail polyline + book locations) for the frontend map. Never
+    broadcast over /ws — fetched once via GET /course, since sim.course.load_course() is
+    lru_cached and doesn't change mid-race."""
+
+    points: list[tuple[float, float]]  # (lat, lon), oldest-to-loop-completion order
+    books: list[CourseBook]
