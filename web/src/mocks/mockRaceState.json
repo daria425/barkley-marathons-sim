@@ -1,0 +1,41 @@
+{
+  "elapsed_min": 0.75,
+  "environment": {
+    "elapsed_min": 0.75,
+    "weather": "clear",
+    "temperature_c": 12.284665913786256,
+    "is_daylight": true,
+    "fog_pct": 1.7733908244319263,
+    "heat_index": 1
+  },
+  "runners": {
+    "Hank": {
+      "persona_name": "Hank",
+      "bib_number": 7,
+      "physiology": {
+        "elapsed_min": 0.75,
+        "hr": 87,
+        "glycogen_pct": 99.96666666666665,
+        "hydration_pct": 99.98500000000001,
+        "core_temp_c": 37.00497753125,
+        "start_core_temp_c": 37,
+        "bonk_push_min": 0
+      },
+      "true_pos": [36.12609154690915, -84.50453000000002],
+      "believed_pos": [36.126051317951905, -84.50442564662384],
+      "loop": 1,
+      "books_found": 0,
+      "pace_min_per_km": 12,
+      "feel": "feeling good",
+      "last_decision": {
+        "effort": 6,
+        "eat": false,
+        "drink": false,
+        "bearing_deg": 0,
+        "rest_min": 0,
+        "quit": false,
+        "monologue": "Minute in and everything's steady. Heart rate's holding where I want it, pace is consistent, cadence hasn't drifted. The gravel's solid under my feet, climb's still manageable. North is north and I'm tracking it fine. No books yet but we're barely started — they'll show up when they show up. Body feels good, no complaints brewing, no aches trying to get my attention. This is the easy part, the part where you feel like you could do anything. Don't let that fool you. Keep the effort modest, keep moving north, keep breathing. Nothing changes until something actually needs to change. One foot, next foot. Simple as that."
+      }
+    }
+  }
+}
