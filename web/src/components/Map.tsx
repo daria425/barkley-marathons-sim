@@ -5,7 +5,9 @@ import { useEffect, useRef } from "react";
 import type { CourseGeometry, RunnerState } from "../types/models";
 
 const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY as string;
-const STYLE_URL = `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`;
+// Dark basemap variant — a light "streets" style would fight the Command Center's
+// black-ground, cyan-accent identity (direction contract OWN-WORLD).
+const STYLE_URL = `https://api.maptiler.com/maps/streets-v2-dark/style.json?key=${MAPTILER_KEY}`;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL as string;
 
 // [lat, lon] on the wire (server/sim/course.py) -> [lon, lat] for GeoJSON/MapLibre.
@@ -65,6 +67,15 @@ function toCourseFeatureCollection(course: CourseGeometry): FeatureCollection {
 export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const hasFramedRunner = useRef(false);
+  // Mock/live data can arrive (and dispatch into `runners`) before the map's "load" event
+  // fires — the style fetch is a network round trip, a synchronous mock dispatch isn't — so
+  // the update effect below can run once against an unloaded map and never fire again for
+  // this data. The "load" handler reads this ref to hydrate whatever arrived in the meantime.
+  const runnersRef = useRef(runners);
+  useEffect(() => {
+    runnersRef.current = runners;
+  });
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -82,20 +93,36 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
     ).then((r) => r.json());
 
     map.on("load", () => {
-      map.addSource(RUNNERS_SOURCE_ID, { type: "geojson", data: EMPTY_FC });
+      map.addSource(RUNNERS_SOURCE_ID, {
+        type: "geojson",
+        data: toRunnerFeatureCollection(runnersRef.current),
+      });
+      const firstRunner = Object.values(runnersRef.current)[0];
+      if (firstRunner && !hasFramedRunner.current) {
+        hasFramedRunner.current = true;
+        map.jumpTo({ center: toLngLat(firstRunner.true_pos), zoom: 14 });
+      }
+      // Believed position carries the accent — it's the runner's noisy self-estimate, the
+      // product's comedy engine (CLAUDE.md), so it draws the eye; true position stays a
+      // quiet, solid ground-truth marker for comparison.
       map.addLayer({
         id: "link",
         type: "line",
         source: RUNNERS_SOURCE_ID,
         filter: ["==", ["get", "kind"], "link"],
-        paint: { "line-color": "#888", "line-dasharray": [2, 2] },
+        paint: { "line-color": "#00aec7", "line-opacity": 0.5, "line-dasharray": [1, 2] },
       });
       map.addLayer({
         id: "true",
         type: "circle",
         source: RUNNERS_SOURCE_ID,
         filter: ["==", ["get", "kind"], "true"],
-        paint: { "circle-color": "#e63946", "circle-radius": 6 },
+        paint: {
+          "circle-color": "#f4f5f6",
+          "circle-radius": 5,
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#000000",
+        },
       });
       map.addLayer({
         id: "believed",
@@ -103,9 +130,12 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
         source: RUNNERS_SOURCE_ID,
         filter: ["==", ["get", "kind"], "believed"],
         paint: {
-          "circle-color": "#457b9d",
-          "circle-radius": 6,
-          "circle-opacity": 0.6,
+          "circle-color": "#00aec7",
+          "circle-radius": 7,
+          "circle-opacity": 0.85,
+          "circle-stroke-width": 4,
+          "circle-stroke-color": "#00aec7",
+          "circle-stroke-opacity": 0.25,
         },
       });
 
@@ -115,7 +145,7 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
         type: "line",
         source: COURSE_SOURCE_ID,
         filter: ["==", ["get", "kind"], "trail"],
-        paint: { "line-color": "#2a9d8f", "line-width": 2 },
+        paint: { "line-color": "#6b6f76", "line-width": 2, "line-dasharray": [3, 2] },
       });
       map.addLayer({
         id: "books",
@@ -123,9 +153,10 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
         source: COURSE_SOURCE_ID,
         filter: ["==", ["get", "kind"], "book"],
         paint: {
-          "circle-color": "#e9c46a",
+          "circle-color": "#e8b339",
           "circle-radius": 5,
           "circle-stroke-width": 1,
+          "circle-stroke-color": "#000000",
         },
       });
       map.addLayer({
@@ -137,6 +168,11 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
           "text-field": ["get", "name"],
           "text-size": 10,
           "text-offset": [0, 1],
+        },
+        paint: {
+          "text-color": "#f4f5f6",
+          "text-halo-color": "#000000",
+          "text-halo-width": 1,
         },
       });
 
@@ -179,7 +215,22 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
       | GeoJSONSource
       | undefined;
     source?.setData(toRunnerFeatureCollection(runners));
+
+    // Frame the first runner's true position once, so the real/ghost dots — the product's
+    // comedy engine — actually land in view instead of relying on the map's static default
+    // center; re-centering on every tick would fight anyone panning to inspect the course.
+    const firstRunner = Object.values(runners)[0];
+    if (map && firstRunner && !hasFramedRunner.current) {
+      hasFramedRunner.current = true;
+      map.jumpTo({ center: toLngLat(firstRunner.true_pos), zoom: 14 });
+    }
   }, [runners]);
 
-  return <div ref={containerRef} className="map" />;
+  return (
+    <div className="relative h-full overflow-hidden rounded-xl border border-white/[0.06] [box-shadow:var(--shadow-panel)]">
+      {/* maplibre-gl sets this container's inline `position` itself (to `relative`), which
+       * would clobber an `absolute inset-0` utility here — plain h-full/w-full sidesteps that. */}
+      <div ref={containerRef} className="h-full w-full" />
+    </div>
+  );
 }

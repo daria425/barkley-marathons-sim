@@ -1,9 +1,16 @@
+import path from 'node:path'
+import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      '@': path.resolve(import.meta.dirname, './src'),
+    },
+  },
   // maplibre-gl ships a separate worker bundle (maplibre-gl-worker.mjs) that Vite's esbuild
   // dep-optimizer doesn't handle correctly — the worker fails to load and the map silently
   // never initializes (a blank canvas, no console error until you dig). Excluding it from

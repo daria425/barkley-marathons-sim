@@ -128,29 +128,66 @@ def test_highlight_falls_back_to_last_turn_when_nothing_eventful():
 
 def test_compact_if_needed_leaves_short_history_untouched():
     turns = [make_turn(i) for i in range(SLIDING_WINDOW_N)]
-    summary, remaining = compact_if_needed("", turns)
+    summary, remaining, folded_count = compact_if_needed("", turns, folded_count=0)
     assert summary == ""
     assert remaining == turns
+    assert folded_count == 0
 
 
 def test_compact_if_needed_folds_oldest_and_keeps_last_n():
     n = 5
     turns = [make_turn(i) for i in range(n + 3)]
-    summary, remaining = compact_if_needed("", turns, n=n)
+    summary, remaining, folded_count = compact_if_needed(
+        "", turns, folded_count=0, n=n, batch_size=1
+    )
     assert remaining == turns[3:]
     assert summary != ""
+    assert folded_count == 3
 
 
 def test_compact_if_needed_appends_to_existing_summary():
     n = 3
     turns = [make_turn(i) for i in range(n + 2)]
-    summary, _ = compact_if_needed("earlier summary text", turns, n=n)
+    summary, _, _ = compact_if_needed(
+        "earlier summary text", turns, folded_count=0, n=n, batch_size=1
+    )
     assert summary.startswith("earlier summary text\n")
 
 
 def test_compact_if_needed_is_deterministic():
     n = 4
     turns = [make_turn(i, feel="bonking" if i == 1 else "feeling good") for i in range(n + 2)]
-    result_a = compact_if_needed("prior", turns, n=n)
-    result_b = compact_if_needed("prior", turns, n=n)
+    result_a = compact_if_needed("prior", turns, folded_count=0, n=n, batch_size=1)
+    result_b = compact_if_needed("prior", turns, folded_count=0, n=n, batch_size=1)
     assert result_a == result_b
+
+
+def test_compact_if_needed_holds_pending_turns_below_batch_size():
+    """Fewer than batch_size turns aged out of the window: nothing gets folded yet — turns sit
+    pending rather than each spawning its own summary line (the pre-fix behavior)."""
+    n = 5
+    turns = [make_turn(i) for i in range(n + 2)]  # only 2 turns pending, batch_size defaults 20
+    summary, remaining, folded_count = compact_if_needed("", turns, folded_count=0, n=n)
+    assert summary == ""
+    assert folded_count == 0
+    assert remaining == turns[-n:]
+
+
+def test_compact_if_needed_folds_one_segment_per_batch_not_per_tick():
+    """Regression test for the original bug: replaying loop.py's call-every-tick pattern across
+    many ticks should produce one summary line per full batch, not one line per tick."""
+    n = 5
+    batch_size = 4
+    summary = ""
+    folded_count = 0
+    all_turns: list[tuple] = []
+    for i in range(30):
+        all_turns.append(make_turn(i))
+        summary, _, folded_count = compact_if_needed(
+            summary, all_turns, folded_count, n=n, batch_size=batch_size
+        )
+    pending_after_last_batch = (len(all_turns) - n - folded_count) % batch_size
+    expected_batches = (len(all_turns) - n) // batch_size
+    assert folded_count == expected_batches * batch_size
+    assert summary.count("\n") == expected_batches - 1
+    assert pending_after_last_batch < batch_size

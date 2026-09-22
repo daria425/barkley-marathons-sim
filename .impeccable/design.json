@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-22T00:00:00Z",
+  "title": "Design System: Barkley Sim",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Command Cyan",
+        "canonical": "#00aec7",
+        "tonalRamp": [
+          "#00232a", "#003b45", "#00525f", "#006a7a", "#008296",
+          "#00aec7", "#3fc4d6", "#8adcea"
+        ]
+      },
+      "background": {
+        "role": "neutral",
+        "displayName": "Void Black",
+        "canonical": "#000000",
+        "tonalRamp": [
+          "#000000", "#0a0a0b", "#131315", "#1c1c1f",
+          "#2a2a2d", "#38383a", "#6b6b6e", "#9a9aa0"
+        ]
+      },
+      "card": {
+        "role": "neutral",
+        "displayName": "Panel Charcoal",
+        "canonical": "#131315",
+        "tonalRamp": [
+          "#000000", "#0a0a0b", "#131315", "#1c1c1f",
+          "#2a2a2d", "#38383a", "#6b6b6e", "#9a9aa0"
+        ]
+      },
+      "foreground": {
+        "role": "neutral",
+        "displayName": "Off-White",
+        "canonical": "#f4f5f6",
+        "tonalRamp": [
+          "#1c1c1f", "#38383a", "#57575a", "#78787c",
+          "#9a9aa0", "#bdbdc2", "#dcdce0", "#f4f5f6"
+        ]
+      },
+      "secondary": {
+        "role": "neutral",
+        "displayName": "Instrument Gray",
+        "canonical": "#38383a",
+        "tonalRamp": [
+          "#131315", "#1c1c1f", "#2a2a2d", "#38383a",
+          "#57575a", "#78787c", "#9a9aa0", "#bdbdc2"
+        ]
+      },
+      "muted-foreground": {
+        "role": "neutral",
+        "displayName": "Muted Gray",
+        "canonical": "#9a9aa0",
+        "tonalRamp": [
+          "#38383a", "#57575a", "#78787c", "#9a9aa0",
+          "#adadb2", "#bdbdc2", "#cfcfd3", "#e2e2e5"
+        ]
+      },
+      "destructive": {
+        "role": "semantic",
+        "displayName": "Alert Red",
+        "canonical": "#ef4b4b",
+        "tonalRamp": [
+          "#3a0f0f", "#5c1717", "#802020", "#a82a2a",
+          "#d13636", "#ef4b4b", "#f37a7a", "#f9b3b3"
+        ]
+      },
+      "map-true-position": {
+        "role": "component-scoped",
+        "displayName": "True Position White",
+        "canonical": "#f4f5f6",
+        "tonalRamp": []
+      },
+      "map-believed-position": {
+        "role": "component-scoped",
+        "displayName": "Believed Position Cyan (alias of primary)",
+        "canonical": "#00aec7",
+        "tonalRamp": []
+      },
+      "map-book-marker": {
+        "role": "component-scoped",
+        "displayName": "Book Marker Gold",
+        "canonical": "#e8b339",
+        "tonalRamp": []
+      },
+      "map-course-trail": {
+        "role": "component-scoped",
+        "displayName": "Course Trail Gray",
+        "canonical": "#6b6f76",
+        "tonalRamp": []
+      }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "Panel headings and the persona name in the watch card." },
+      "body": { "displayName": "Body", "purpose": "Monologue prose and idle-state copy." },
+      "label": { "displayName": "Label", "purpose": "Uppercase muted data-labels above watch-face readouts, never an editorial kicker." },
+      "readout": { "displayName": "Readout", "purpose": "Every numeric value and timestamp; mono, tabular-nums." }
+    },
+    "shadows": [
+      {
+        "name": "panel",
+        "value": "0 1px 2px rgba(0,0,0,0.4), 0 12px 32px -8px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.04)",
+        "purpose": "The single elevation token shared by every panel, the map frame, and the bottom rail. No second shadow exists in the system."
+      }
+    ],
+    "motion": [],
+    "breakpoints": [
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "The system's one container primitive: charcoal background, 14px radius, hairline border, single shared shadow. Every card/frame in the dashboard is this component.",
+      "html": "<div class=\"ds-panel\">Panel content</div>",
+      "css": ".ds-panel { background: #131315; color: #f4f5f6; border-radius: 14px; border: 1px solid rgba(255,255,255,0.06); box-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 12px 32px -8px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.04); padding: 16px; }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Cyan-on-near-black call to action (e.g. Start).",
+      "html": "<button class=\"ds-btn-primary\">Start</button>",
+      "css": ".ds-btn-primary { background: #00aec7; color: #00171c; font-family: 'Ubuntu', system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; } .ds-btn-primary:hover { background: color-mix(in srgb, #00aec7 90%, transparent); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(0,174,199,0.5); }"
+    },
+    {
+      "name": "Outline Badge",
+      "kind": "chip",
+      "refersTo": "badge-outline",
+      "description": "Pill-shaped metadata tag, e.g. bib number.",
+      "html": "<span class=\"ds-badge-outline\">Bib #42</span>",
+      "css": ".ds-badge-outline { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; border: 1px solid rgba(255,255,255,0.1); color: #9a9aa0; font-family: 'Ubuntu', system-ui, sans-serif; font-size: 0.75rem; font-weight: 500; background: transparent; }"
+    },
+    {
+      "name": "Watch-Face Stat",
+      "kind": "custom",
+      "refersTo": "panel",
+      "description": "Label/readout pair used for every physiology stat (HR, pace, glycogen, etc.); the label is an 11px uppercase muted data-label, never an editorial kicker, and the value is a mono tabular-nums readout, optionally cyan-accented for the single most important reading.",
+      "html": "<dl class=\"ds-stat\"><dt class=\"ds-stat-label\">HR</dt><dd class=\"ds-stat-value ds-stat-value--accent\">142 bpm</dd></dl>",
+      "css": ".ds-stat { display: flex; flex-direction: column; gap: 2px; } .ds-stat-label { font-family: 'Ubuntu', system-ui, sans-serif; font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.02em; text-transform: uppercase; color: #9a9aa0; } .ds-stat-value { font-family: 'Ubuntu Mono', ui-monospace, monospace; font-size: 1.25rem; line-height: 1; font-variant-numeric: tabular-nums; color: #f4f5f6; } .ds-stat-value--accent { color: #00aec7; }"
+    },
+    {
+      "name": "Speed Select",
+      "kind": "input",
+      "refersTo": "panel",
+      "description": "Dark dropdown for the 1x/60x/600x sim-speed control, values rendered in mono.",
+      "html": "<button class=\"ds-select-trigger\">60x <svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"m6 9 6 6 6-6\"/></svg></button>",
+      "css": ".ds-select-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; height: 32px; padding: 0 12px; background: transparent; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #f4f5f6; font-family: 'Ubuntu Mono', ui-monospace, monospace; font-size: 0.875rem; } .ds-select-trigger:focus-visible { outline: none; border-color: rgba(0,174,199,0.5); box-shadow: 0 0 0 3px rgba(0,174,199,0.5); } .ds-select-trigger svg { opacity: 0.5; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Broadcast Command Center",
+    "overview": "Barkley Sim's live-race dashboard reads like a race-control monitor bolted together for one purpose: make an LLM agent's real position, believed position, vitals, and reasoning legible to someone with zero trail-running context, at a glance, while sim time runs underneath it. It is a pure-black instrument panel, not a card grid — one instrument (the map, carrying the true-vs-believed position gap) leads, vitals and monologue are side instruments, and time/speed/connection are a persistent bottom rail, never a modal. Every surface sits at the same restrained elevation off a near-black ground; nothing shouts over anything else.\n\nThe palette is almost monochrome on purpose: near-black ground, off-white text, one warm-neutral secondary gray, and exactly one saturated color — a cyan — spent only on things that mean \"this is the signal to watch\" (the believed-position marker, active/primary actions, live-connection state, key readouts like HR). Ubuntu carries every weight of text in the system, including numeric readouts in its Mono cut; there is no separate display/editorial face anywhere in the build; there is also no large hero/display type tier at all — the interface never needs to shout a headline, only report numbers.",
+    "keyCharacteristics": [
+      "Near-black ground, off-white text, single cyan accent — no secondary hue anywhere in the shipped build",
+      "One shadow language (--shadow-panel) shared by every panel; no per-panel elevation variation",
+      "Ubuntu (sans) for prose and labels, Ubuntu Mono for every numeric readout and timestamp",
+      "Inline SVG dotted-gradient backdrop, never a raster background asset",
+      "Real position stays neutral (white/black); belief/estimate is the only thing drawn in the accent color"
+    ],
+    "rules": [
+      { "name": "The One Signal Rule", "body": "Cyan is the only saturated color in the system. It marks exactly one thing per context — the belief marker on the map, the live dot in the connection badge, the primary action — never decoration. If a second accent hue is needed, that's a sign the interface has stopped being an instrument panel.", "section": "colors" },
+      { "name": "The No-Display-Tier Rule", "body": "This system has no display/hero typography role. Every screen in the shipped build is instrumentation, not editorial; don't introduce a large display size without a concrete need for one.", "section": "typography" },
+      { "name": "The One Shadow Rule", "body": "All elevated surfaces share exactly one shadow token. Don't invent a second, \"bigger\" shadow for a surface meant to feel more important — importance is expressed through position and content, not elevation.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do spend the cyan accent (#00aec7) on exactly one signal per context — belief marker, live state, primary action — per the One Signal Rule.",
+      "Do apply the single --shadow-panel shadow to any new elevated surface; don't create a second shadow token.",
+      "Do render numeric/time values in Ubuntu Mono with tabular-nums; reserve Ubuntu (sans) for prose and labels.",
+      "Do keep true-position markers neutral (off-white/black) and reserve the accent color for believed/estimated state, anywhere position or estimation is shown again.",
+      "Do self-host font files (/public/fonts); never load fonts from a CDN <link>."
+    ],
+    "donts": [
+      "Don't add a second saturated accent hue; the system's identity depends on cyan being the only one.",
+      "Don't introduce hard-offset or \"neobrutalist\" shadows — the one shadow token is soft and ambient by design.",
+      "Don't turn the watch-face stat label (uppercase, 11px, muted) into a decorative section kicker/eyebrow elsewhere — it's a functional data-label paired with a readout, not a headline device, and should not be promoted to a general heading style.",
+      "Don't treat the raster look as acceptable for the background texture — the dotted gradient is inline SVG (<pattern> + mask), never a bitmap asset."
+    ]
+  }
+}

@@ -13,7 +13,7 @@ import aiosqlite
 from langfuse import propagate_attributes
 
 import db
-from agents.memory import SLIDING_WINDOW_N, compact_if_needed
+from agents.memory import COMPACT_BATCH_SIZE, SLIDING_WINDOW_N, compact_if_needed
 from agents.participant import Participant
 from agents.personas import load_persona
 from models import Checkpoint, Decision, Observation, RaceState, RunnerState
@@ -62,9 +62,12 @@ class RunnerLoop:
         self.sem = sem
         self.decision = STARTING_DECISION
         # ADR-0008: running compacted summary + how far it reaches. Defaults are the
-        # fresh-start case; run() overwrites both from the checkpoint when resuming.
+        # fresh-start case; run() overwrites all three from the checkpoint when resuming.
         self.summary = ""
         self.summary_covers_up_to_elapsed_min = 0
+        # High-water mark for batched compaction (memory.py's compact_if_needed) — how many of
+        # this runner's turns are already folded into `summary`.
+        self.summary_folded_count = 0
 
 
 @dataclass(frozen=True)
@@ -225,12 +228,19 @@ async def _compact_and_checkpoint(
     summary and write a checkpoint. Failures here are swallowed by think()'s own try/except —
     losing a checkpoint write shouldn't crash the tick loop any more than a DB hiccup should."""
     all_turns = await db.get_all_turns(runner.conn, runner.runner_id)
-    new_summary, remaining = compact_if_needed(runner.summary, all_turns, n=SLIDING_WINDOW_N)
+    new_summary, remaining, new_folded_count = compact_if_needed(
+        runner.summary,
+        all_turns,
+        runner.summary_folded_count,
+        n=SLIDING_WINDOW_N,
+        batch_size=COMPACT_BATCH_SIZE,
+    )
     if new_summary != runner.summary:
-        folded_count = len(all_turns) - len(remaining)
-        runner.summary_covers_up_to_elapsed_min = round(all_turns[folded_count - 1][0].elapsed_min)
+        newly_folded_elapsed = all_turns[new_folded_count - 1][0].elapsed_min
+        runner.summary_covers_up_to_elapsed_min = round(newly_folded_elapsed)
         print(f"[{obs.clock_time}] ...{runner.runner_id}'s memory compacts: {new_summary!r}")
     runner.summary = new_summary
+    runner.summary_folded_count = new_folded_count
 
     checkpoint = Checkpoint(
         runner_id=runner.runner_id,
@@ -249,6 +259,7 @@ async def _compact_and_checkpoint(
         rng_state=snapshot.rng_state,
         summary_text=runner.summary,
         summary_covers_up_to_elapsed_min=runner.summary_covers_up_to_elapsed_min,
+        summary_folded_count=runner.summary_folded_count,
     )
     await db.save_checkpoint(runner.conn, checkpoint)
 
@@ -383,6 +394,7 @@ async def run(speed: float = 1.0, on_update: OnUpdate | None = None) -> None:
         runner.decision = checkpoint.last_decision
         runner.summary = checkpoint.summary_text
         runner.summary_covers_up_to_elapsed_min = checkpoint.summary_covers_up_to_elapsed_min
+        runner.summary_folded_count = checkpoint.summary_folded_count
         print(
             f"Resuming {runner.runner_id} from checkpoint at elapsed_min="
             f"{checkpoint.elapsed_min:.1f} (summary: {len(checkpoint.summary_text)} chars)"

@@ -80,6 +80,7 @@ class Checkpoint(BaseModel):
     rng_state: str
     summary_text: str
     summary_covers_up_to_elapsed_min: int
+    summary_folded_count: int = 0
 
 
 class RaceState(BaseModel):

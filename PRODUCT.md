@@ -35,7 +35,15 @@ The distinguishing mechanism is the true-vs-believed-position split: the agent r
 
 ## Brand Commitments
 
-Project name is locked: **Barkley Sim**. No other voice, palette, typography, or visual asset commitments exist yet.
+Project name is locked: **Barkley Marathons Simulator**.
+Font family: Strong Ubuntu, sans-serif
+Color palette:
+#000
+#38383a
+#00aec7 (Accents)
+
+- Dotted gray gradient for background
+- Inspiration: NIKE, Scarpa, Adidas websites, modern, clear UI
 
 ## Evidence on Hand
 

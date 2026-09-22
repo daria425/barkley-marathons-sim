@@ -14,6 +14,16 @@ from models import Decision, Observation
 # not a documented spec — pick whatever value exercises compaction usefully for a given run.
 SLIDING_WINDOW_N = 20
 
+# How many newly-aged-out turns get folded into ONE summary segment at a time. Independent of
+# SLIDING_WINDOW_N on purpose: N is "how much recent detail the LLM sees verbatim", this is
+# "how coarse the compacted history gets" — a long race (60h/14,400 ticks) needs this decoupled
+# from N or the summary grows by one line per tick for the entire race (see memory_example.md
+# at the repo root for what that looked like before this was added). Turns that have aged out
+# of the window but haven't yet reached a full batch are simply not in the prompt yet — a
+# bounded blind spot of at most BATCH_SIZE-1 turns (a few sim-minutes at TICK_DT_MIN=0.25),
+# negligible against a 60h race.
+COMPACT_BATCH_SIZE = 20
+
 # Mirror physiology.describe_feel's exact strings (sim/physiology.py) so segment extraction can
 # rank severity. Not imported directly — Observation.feel is a free-text field (hallucinations
 # will inject other strings later per ADR-0001), so this module keeps its own recognized
@@ -146,20 +156,33 @@ def turns_to_messages(turns: list[tuple[Observation, Decision]]) -> list[dict]:
 def compact_if_needed(
     summary: str,
     all_turns: list[tuple[Observation, Decision]],
+    folded_count: int,
     n: int = SLIDING_WINDOW_N,
-) -> tuple[str, list[tuple[Observation, Decision]]]:
-    """ADR-0008's compaction trigger: if `all_turns` (the FULL history for this runner,
-    oldest-first — db.get_all_turns, not db.get_recent_turns) has more than `n` entries, fold
-    the oldest `len(all_turns) - n` into `summary` as one segment. Returns
-    (new_summary, remaining_window) where remaining_window is exactly the last `n` turns to
-    keep replaying verbatim.
+    batch_size: int = COMPACT_BATCH_SIZE,
+) -> tuple[str, list[tuple[Observation, Decision]], int]:
+    """ADR-0008's compaction trigger, batched (see COMPACT_BATCH_SIZE's docstring on why).
+    `all_turns` is the FULL history for this runner, oldest-first (db.get_all_turns, not
+    db.get_recent_turns). `folded_count` is how many of the oldest turns are already folded
+    into `summary` — the caller's high-water mark, since this function only ever sees a
+    snapshot and can't infer it from `summary` text.
+
+    Returns (new_summary, remaining_window, new_folded_count). remaining_window is always
+    exactly the last `n` turns, to keep replaying verbatim. Turns between `folded_count` and
+    `len(all_turns) - n` are "pending": aged out of the verbatim window but not yet folded,
+    because fewer than `batch_size` of them have piled up — nothing happens to them until
+    enough accumulate, at which point they're folded into ONE segment together (not one
+    segment per turn, which is what made the unbatched version grow by a full line every tick).
 
     Pure and deterministic given the same inputs — unlike the originally-planned LLM call, this
     is unit-testable without hitting the Anthropic API (ADR-0008)."""
     if len(all_turns) <= n:
-        return summary, list(all_turns)
-    split = len(all_turns) - n
-    aged_out, remaining = all_turns[:split], all_turns[split:]
+        return summary, list(all_turns), folded_count
+    fold_upto = len(all_turns) - n
+    remaining = all_turns[fold_upto:]
+    pending = fold_upto - folded_count
+    if pending < batch_size:
+        return summary, remaining, folded_count
+    aged_out = all_turns[folded_count:fold_upto]
     segment_text = compact_segment(aged_out)
     new_summary = f"{summary}\n{segment_text}" if summary else segment_text
-    return new_summary, remaining
+    return new_summary, remaining, fold_upto
