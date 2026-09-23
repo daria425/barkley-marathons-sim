@@ -14,7 +14,8 @@ function Limb({ leg = false }: { leg?: boolean }) {
         <capsuleGeometry args={[leg ? 0.115 : 0.085, 0.29, 4, 8]} />
         <meshStandardMaterial color={leg ? "#303e3b" : SHIRT} roughness={0.9} />
       </mesh>
-      <group position={[0, -0.43, 0]} rotation={[leg ? -0.3 : -1.05, 0, 0]}>
+      {/* Forward is -Z: elbows bend forward (+X), knees bend back (-X). */}
+      <group position={[0, -0.43, 0]} rotation={[leg ? -0.3 : 1.05, 0, 0]}>
         <mesh position={[0, -0.19, 0]} castShadow>
           <capsuleGeometry args={[leg ? 0.085 : 0.065, 0.27, 4, 8]} />
           <meshStandardMaterial color={SKIN} roughness={0.85} />
