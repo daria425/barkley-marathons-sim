@@ -119,6 +119,17 @@ def terrain_at(course: Course, pos: tuple[float, float]) -> str:
     return TERRAIN_LABELS[bucket % len(TERRAIN_LABELS)]
 
 
+def dist_to_trail_km(course: Course, pos: tuple[float, float]) -> float:
+    """Raw distance to the nearest trail point, in km — not clamped to
+    TRAIL_PROXIMITY_KM's on/off-trail threshold. Unlike terrain_at (a single fixed string for
+    ANY off-trail position, however far), this is continuous: it's the only signal in the
+    Observation that actually varies with bearing/position once off-trail, so a runner can
+    tell a bearing is working from this shrinking turn over turn, not just from terrain text
+    that reads identically whether you're 200m or 5km off course."""
+    _, dist_km = _nearest_point_idx(course, pos)
+    return dist_km
+
+
 def grade_pct_at(course: Course, pos: tuple[float, float]) -> float:
     """Elevation grade near the trail, from the slope between the points either side of the
     nearest one. 0.0 off-trail — there's no elevation data off the mapped course."""

@@ -377,6 +377,7 @@ def _build_observation(
         last_ate_min_ago=round(last_ate_min_ago),
         bearing_deg=decision.bearing_deg,
         gps_guess=believed_pos,
+        dist_to_trail_km=course_mod.dist_to_trail_km(course, true_pos),
         terrain=course_mod.terrain_at(course, true_pos),
         weather=park.weather,
         books_found=len(books_collected),

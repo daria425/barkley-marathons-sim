@@ -21,6 +21,8 @@ class Observation(BaseModel):
     last_ate_min_ago: int
     bearing_deg: float
     gps_guess: tuple[float, float]  # NOISY believed position
+    dist_to_trail_km: float  # raw distance to nearest trail point — continuous, not clamped
+    # to the on/off-trail threshold, so it reads as a trend across turns rather than a flip
     terrain: str  # "thick briars", "creek crossing"
     weather: str
     books_found: int

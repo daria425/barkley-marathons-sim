@@ -46,6 +46,29 @@ def test_terrain_on_trail_is_one_of_the_labeled_buckets():
     assert course.terrain_at(COURSE, on_trail) in course.TERRAIN_LABELS
 
 
+def test_dist_to_trail_km_is_near_zero_on_trail():
+    on_trail = (COURSE.points[10].lat, COURSE.points[10].lon)
+    assert course.dist_to_trail_km(COURSE, on_trail) < 1e-6
+
+
+def test_dist_to_trail_km_grows_with_distance_unlike_terrain_text():
+    """The bug this field fixes: terrain_at reads identically far or a little off-trail
+    (see test_terrain_and_grade_are_generic_off_the_trail) — dist_to_trail_km must not,
+    since it's the only signal a bearing choice can actually move. Uses big lat/lon offsets
+    (like that test) so both points are unambiguously off-trail, not just past the threshold
+    by chance depending on where the loop happens to curve back nearby."""
+    start_lat, start_lon = course.start_coords(COURSE)
+    near = (start_lat + 0.01, start_lon + 0.01)  # ~1km away
+    far = (start_lat + 0.1, start_lon + 0.1)  # ~11km away
+    near_dist = course.dist_to_trail_km(COURSE, near)
+    far_dist = course.dist_to_trail_km(COURSE, far)
+    assert course.TRAIL_PROXIMITY_KM < near_dist < far_dist
+    # both read as the same generic off-trail terrain despite the very different distances
+    near_terrain = course.terrain_at(COURSE, near)
+    far_terrain = course.terrain_at(COURSE, far)
+    assert near_terrain == far_terrain == course.OFF_TRAIL_TERRAIN
+
+
 def test_books_found_this_tick_is_monotonic_and_proximity_triggered():
     book = COURSE.books[0]
     found = course.books_found_this_tick(COURSE, (book.lat, book.lon), frozenset())

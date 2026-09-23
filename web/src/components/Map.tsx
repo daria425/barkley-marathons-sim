@@ -86,6 +86,8 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
       zoom: 12,
     });
     mapRef.current = map;
+    const resizeObserver = new ResizeObserver(() => map.resize());
+    resizeObserver.observe(containerRef.current);
 
     let cancelled = false;
     const coursePromise: Promise<CourseGeometry> = fetch(
@@ -205,6 +207,7 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
 
     return () => {
       cancelled = true;
+      resizeObserver.disconnect();
       map.remove();
     };
   }, []);
@@ -227,7 +230,7 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
   }, [runners]);
 
   return (
-    <div className="relative h-full overflow-hidden rounded-xl border border-white/[0.06] [box-shadow:var(--shadow-panel)]">
+    <div className="relative h-full overflow-hidden">
       {/* maplibre-gl sets this container's inline `position` itself (to `relative`), which
        * would clobber an `absolute inset-0` utility here — plain h-full/w-full sidesteps that. */}
       <div ref={containerRef} className="h-full w-full" />

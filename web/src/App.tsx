@@ -1,6 +1,6 @@
 import { Controls } from "@/components/Controls";
 import { DottedBackground } from "@/components/DottedBackground";
-import { RaceMap } from "@/components/Map";
+import { RaceViewer } from "@/components/RaceViewer";
 import { MonologueFeed } from "@/components/MonologueFeed";
 import { Panel } from "@/components/Panel";
 import { WatchFace } from "@/components/WatchFace";
@@ -29,8 +29,8 @@ function App() {
       <DottedBackground />
 
       <div className="flex min-h-0 flex-col gap-4 lg:flex-1 lg:flex-row lg:gap-5">
-        <div className="h-[45vh] shrink-0 lg:h-auto lg:flex-1">
-          <RaceMap runners={runners} />
+        <div className="h-[60vh] min-h-[420px] shrink-0 lg:h-auto lg:min-h-0 lg:min-w-0 lg:flex-1">
+          <RaceViewer runners={runners} />
         </div>
 
         <aside className="flex min-h-0 flex-col gap-4 lg:basis-[40%] lg:shrink-0 lg:grow-0">

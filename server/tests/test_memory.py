@@ -35,6 +35,7 @@ def make_turn(
         last_ate_min_ago=0,
         bearing_deg=0.0,
         gps_guess=(0.0, 0.0),
+        dist_to_trail_km=0.0,
         terrain="gravel road",
         weather="clear",
         books_found=books_found,

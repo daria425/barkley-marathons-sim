@@ -137,6 +137,7 @@ def format_observation(obs: Observation) -> str:
         f"HR {obs.hr}, pace {obs.pace_min_per_km:.1f} min/km, cadence {obs.cadence}.",
         f"You feel: {obs.feel}. Last ate {obs.last_ate_min_ago} min ago.",
         f"Bearing {obs.bearing_deg:.0f} degrees. Believed position: {obs.gps_guess}.",
+        f"Distance to trail: {obs.dist_to_trail_km:.2f}km.",
         f"Terrain: {obs.terrain}. Weather: {obs.weather}.",
     ]
     return "\n".join(lines)
