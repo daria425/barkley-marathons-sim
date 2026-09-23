@@ -19,14 +19,15 @@ setup_observability()
 # noqa: E402 below — must follow setup_observability(), see its docstring
 from models import CourseBook, CourseGeometry, RaceState  # noqa: E402
 from sim import course as course_mod  # noqa: E402
-from sim.loop import run  # noqa: E402
+from sim.loop import FULL_RACE_MINUTES, run  # noqa: E402
 
 app = FastAPI()
 
-_cors_origins = os.environ.get("CORS_ORIGINS", "")
+_raw_cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")
+_cors_origins = [origin.strip() for origin in _raw_cors_origins if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins.split(",") if _cors_origins else [],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -55,15 +56,18 @@ def health_check():
 
 
 @app.post("/run")
-async def run_ultra_sim(speed: float = 1.0):
+async def run_ultra_sim(speed: float = 1.0, duration_min: float = FULL_RACE_MINUTES):
     """Kicks off the sim loop as a background task and returns immediately — the sim never
     waits for callers any more than it waits for the LLM. Only one run at a time in v1
-    (single-runner, no race-end concept yet, per CLAUDE.md)."""
+    (single-runner, no race-end concept yet, per CLAUDE.md). duration_min defaults to the full
+    60h race; pass a smaller value for a bounded live canary."""
     global _run_task
     if _run_task is not None and not _run_task.done():
         return {"status": "already running"}
-    _run_task = asyncio.create_task(run(speed=speed, on_update=_broadcast))
-    return {"status": "started", "speed": speed}
+    _run_task = asyncio.create_task(
+        run(speed=speed, duration_min=duration_min, on_update=_broadcast)
+    )
+    return {"status": "started", "speed": speed, "duration_min": duration_min}
 
 
 @app.get("/course", response_model=CourseGeometry)

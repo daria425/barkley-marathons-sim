@@ -27,10 +27,14 @@ from sim.sim_utils import format_clock_time
 OnUpdate = Callable[[RaceState], Awaitable[None]]
 
 # Every tick spawns a brain call (no gating by trigger events yet — see CLAUDE.md's "N is not
-# decided yet"), and real wall-clock time between ticks is TICK_DT_MIN * 60s. ADR-0005's
-# original 0.25 (15s/call) restored here; TOTAL_SIM_MINUTES set for 30 calls (~7.5 real min).
+# decided yet"), and real wall-clock time between ticks is TICK_DT_MIN * 60s (at speed=1).
 TICK_DT_MIN = 0.25
-TOTAL_SIM_MINUTES = 30 * TICK_DT_MIN
+
+# Race length in sim-minutes. Real target per CLAUDE.md ("60-hour cutoff"). run()'s
+# duration_min param defaults to this — pass a smaller value (e.g. via
+# scripts/smoke_test.py --duration-min) for a short smoke test or a bounded live canary
+# instead of editing this constant.
+FULL_RACE_MINUTES = 60 * 60
 DB_PATH = "smoke_test.db"
 PERSONA_PATH = Path(__file__).parent.parent / "agents" / "personas" / "barkley_expert.yaml"
 
@@ -183,7 +187,12 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
     pace = physiology.compute_pace(
         BASE_PACE_MIN_PER_KM, decision.effort, state.physio.glycogen_pct, collapsed, grade_pct
     )
-    distance_km = dt_min / pace
+    # A tick under a rest_min>0 decision covers no ground — otherwise "rest" was free (HR/
+    # glycogen/position all advanced exactly as if still moving), so the sim had no way to make
+    # resting cost anything, and no way for a repeated rest decision to ever change what the
+    # next Observation looks like. `pace` above still reflects effort, unchanged — it's what
+    # you'd be running at if you weren't resting, not what ground you actually covered.
+    distance_km = 0.0 if decision.rest_min > 0 else dt_min / pace
     state.true_pos = course_mod.advance_position(state.true_pos, decision.bearing_deg, distance_km)
     state.dist_since_loop_start_km += distance_km
     if course_mod.loop_completed(the_course, state.true_pos, state.dist_since_loop_start_km):
@@ -376,11 +385,19 @@ def _build_observation(
     )
 
 
-async def run(speed: float = 1.0, on_update: OnUpdate | None = None) -> None:
+async def run(
+    speed: float = 1.0,
+    duration_min: float = FULL_RACE_MINUTES,
+    on_update: OnUpdate | None = None,
+) -> None:
     """speed=1.0 is real Barkley pacing (CLAUDE.md: "the eventual real way to run this is at
     1x realtime... 60x/600x speed is for iterating during development, not the intended
     experience") — higher values only compress wall-clock time between ticks, never sim time
     itself (TICK_DT_MIN, physiology, everything else is unchanged).
+
+    duration_min is how much sim-time to run before returning, independent of speed — default
+    is the full 60h race; pass a smaller value for a smoke test or a bounded live canary
+    without touching FULL_RACE_MINUTES.
 
     on_update, when given, is awaited once per tick with the current RaceState (main.py wires
     this to its WS broadcaster) and again whenever a brain call lands mid-tick (see think()).
@@ -407,7 +424,7 @@ async def run(speed: float = 1.0, on_update: OnUpdate | None = None) -> None:
         print(f"Starting {runner.runner_id} fresh, start_hour={start_hour:.2f}")
 
     tasks: list[asyncio.Task] = []
-    n_ticks = int(TOTAL_SIM_MINUTES / TICK_DT_MIN)
+    n_ticks = int(duration_min / TICK_DT_MIN)
     for _ in range(n_ticks):
         decision = runner.decision
         obs = advance_tick(state, decision, TICK_DT_MIN)
@@ -457,8 +474,15 @@ if __name__ == "__main__":
         "'Speed multiplier is a dev convenience, not the target mode.' Default 1.0 = real "
         "Barkley pacing.",
     )
+    parser.add_argument(
+        "--duration-min",
+        type=float,
+        default=FULL_RACE_MINUTES,
+        help="Sim-minutes to run before stopping, independent of --speed. Default is the full "
+        "60h race (3600). Pass a smaller value for a short smoke test or a bounded live canary.",
+    )
     args = parser.parse_args()
     if args.fresh:
         Path(DB_PATH).unlink(missing_ok=True)
 
-    asyncio.run(run(speed=args.speed))
+    asyncio.run(run(speed=args.speed, duration_min=args.duration_min))

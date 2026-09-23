@@ -23,8 +23,18 @@ if __name__ == "__main__":
         help="Wall-clock speedup, e.g. 60 = 1 sim-minute every real second. Dev convenience "
         "only, per CLAUDE.md — default 1.0 is real Barkley pacing.",
     )
+    parser.add_argument(
+        "--duration-min",
+        type=float,
+        default=7.5,
+        help="Sim-minutes to run before stopping (ADR-0005's original smoke-test length). Pass "
+        "a larger value for a bounded live canary against the real API — see CLAUDE.md.",
+    )
     args = parser.parse_args()
 
-    print(f"Starting Barkley smoke test — one runner, speed={args.speed}x...")
-    asyncio.run(run(speed=args.speed))
+    print(
+        f"Starting Barkley smoke test — one runner, speed={args.speed}x, "
+        f"duration={args.duration_min} sim-min..."
+    )
+    asyncio.run(run(speed=args.speed, duration_min=args.duration_min))
     langfuse.flush()  # short-lived script — nothing sends without this
