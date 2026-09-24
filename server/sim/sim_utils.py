@@ -24,3 +24,13 @@ def format_clock_time(start_hour: float, elapsed_min: float) -> str:
     period = "AM" if hh < 12 else "PM"
     display_hour = hh % 12 or 12
     return f"Day {day}, {display_hour}:{mm:02d} {period}"
+
+
+def format_local_time(start_hour: float, elapsed_min: float) -> str:
+    """Same race-clock math as format_clock_time, labeled as Frozen Head State Park's real
+    timezone (Tennessee is US Eastern) for FrozenHeadStatePark.local_time — a frontend-facing
+    field, not the LLM prompt's clock_time. Deliberately not anchored to a real datetime.now():
+    sim/*.py is pure/deterministic by design (ADR-0002, ADR-0003), and the race has no real
+    calendar date, only a race-day number — this only makes the existing hour-of-day honest
+    about which real timezone it corresponds to."""
+    return f"{format_clock_time(start_hour, elapsed_min)} ET"

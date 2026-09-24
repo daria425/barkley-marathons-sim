@@ -34,7 +34,8 @@ export interface paths {
          * Run Ultra Sim
          * @description Kicks off the sim loop as a background task and returns immediately — the sim never
          *     waits for callers any more than it waits for the LLM. Only one run at a time in v1
-         *     (single-runner, no race-end concept yet, per CLAUDE.md).
+         *     (single-runner, no race-end concept yet, per CLAUDE.md). duration_min defaults to the full
+         *     60h race; pass a smaller value for a bounded live canary.
          */
         post: operations["run_ultra_sim_run_post"];
         delete?: never;
@@ -152,6 +153,8 @@ export interface components {
             fog_pct: number;
             /** Heat Index */
             heat_index: number;
+            /** Local Time */
+            local_time: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -206,6 +209,8 @@ export interface components {
                 number,
                 number
             ];
+            /** Current Terrain */
+            current_terrain: string;
             /** Believed Pos */
             believed_pos: [
                 number,
@@ -267,6 +272,7 @@ export interface operations {
         parameters: {
             query?: {
                 speed?: number;
+                duration_min?: number;
             };
             header?: never;
             path?: never;

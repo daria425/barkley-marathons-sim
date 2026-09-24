@@ -13,7 +13,8 @@ from sim.physiology import PhysiologyState
 
 class Observation(BaseModel):
     elapsed_min: int
-    clock_time: str  # e.g. "Day 2, 3:15 AM" — sim_utils.format_clock_time(start_hour, elapsed_min)
+    # e.g. "Day 2, 3:15 AM" — sim_utils.format_clock_time(start_hour, elapsed_min)
+    clock_time: str
     hr: int
     pace_min_per_km: float
     cadence: int
@@ -48,7 +49,9 @@ class RunnerState(BaseModel):
     bib_number: int  # real Barkley bibs are odd numbers — see ADR-0010
     physiology: PhysiologyState
     true_pos: tuple[float, float]
-    believed_pos: tuple[float, float]  # NOISY — see CLAUDE.md's "true vs believed position"
+    current_terrain: str  # same values as Observation.terrain, frontend-facing name
+    # NOISY — see CLAUDE.md's "true vs believed position"
+    believed_pos: tuple[float, float]
     loop: int
     books_found: int
     pace_min_per_km: float
@@ -75,7 +78,8 @@ class Checkpoint(BaseModel):
     believed_pos: tuple[float, float]
     loop: int
     books_found: int
-    books_collected_this_loop: list[int] = []  # ADR-0010: resets each loop, real Barkley rule
+    # ADR-0010: resets each loop, real Barkley rule
+    books_collected_this_loop: list[int] = []
     dist_since_loop_start_km: float = 0.0  # ADR-0010's loop-completion heuristic
     last_ate_min_ago: float
     last_decision: Decision
@@ -92,7 +96,8 @@ class RaceState(BaseModel):
 
     elapsed_min: float
     environment: FrozenHeadStatePark
-    runners: dict[str, RunnerState]  # keyed by persona_name, for v1's single runner too
+    # keyed by persona_name, for v1's single runner too
+    runners: dict[str, RunnerState]
 
 
 class CourseBook(BaseModel):
@@ -107,5 +112,6 @@ class CourseGeometry(BaseModel):
     broadcast over /ws — fetched once via GET /course, since sim.course.load_course() is
     lru_cached and doesn't change mid-race."""
 
-    points: list[tuple[float, float]]  # (lat, lon), oldest-to-loop-completion order
+    # (lat, lon), oldest-to-loop-completion order
+    points: list[tuple[float, float]]
     books: list[CourseBook]

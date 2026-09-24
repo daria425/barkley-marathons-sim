@@ -1,3 +1,18 @@
+# Runner scene development
+
+Run `npm run dev -- --mode dev --port 5174` and open the **Runner** slide.
+The scene animates automatically using the mock runner and environment. In live mode,
+it follows the broadcast state. Hidden slides/browser tabs suspend rendering automatically.
+The temporary Preview Studio and manual scene play/pause controls were removed after review.
+
+Scene modules live under `src/components/scene/`. `terrain.ts` owns visual presets;
+`conditions.ts` parses the fictional Eastern park clock and resolves weather. The backend's
+`current_terrain` and `local_time` arrive through generated API types; don't duplicate them.
+
+Checks: `npm run build`, `npm run lint`, and `node --test tests/scene-conditions.test.mjs`.
+
+---
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.

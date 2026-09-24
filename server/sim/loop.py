@@ -334,6 +334,7 @@ def _build_runner_state(
         bib_number=runner.participant.persona.bib_number,
         physiology=snapshot.physio,
         true_pos=snapshot.true_pos,
+        current_terrain=obs.terrain,
         believed_pos=snapshot.believed_pos,
         loop=snapshot.loop,
         books_found=len(snapshot.books_collected),

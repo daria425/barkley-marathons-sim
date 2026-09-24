@@ -1,16 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { MathUtils } from "three";
-import { MessageCircle, Pause, Play } from "lucide-react";
+import { MessageCircle } from "lucide-react";
 import type { FrozenHeadStatePark, RunnerState } from "@/types/models";
 import { Landscape } from "./scene/Landscape";
 import { TrailRunner } from "./scene/TrailRunner";
 import { runnerSpeed } from "./scene/motion";
 import type { SceneMotion } from "./scene/motion";
+import { Atmosphere } from "./scene/Atmosphere";
+import { WeatherEffects } from "./scene/WeatherEffects";
+import { sceneConditions } from "./scene/conditions";
+import type { AtmosphereState, Conditions } from "./scene/conditions";
 
-function World({ speed, daylight, fog, hasRunner }: { speed: number; daylight: boolean; fog: number; hasRunner: boolean }) {
+function World({ speed, conditions, terrain, hasRunner, snap }: {
+  speed: number; conditions: Conditions; terrain?: string; hasRunner: boolean; snap: boolean;
+}) {
+  const atmosphere = useRef<AtmosphereState>({ rain: 0, wind: 0, wetness: 0, night: 0 });
   const motion = useRef<SceneMotion>({ distance: 0, phase: 0, speed, time: 0 });
   useFrame((_, delta) => {
+    if (snap) { motion.current.speed = speed; return; }
     // Ignore a long first frame after resuming a hidden tab/slide.
     const dt = Math.min(delta, 0.05);
     motion.current.speed = MathUtils.damp(motion.current.speed, speed, 5, dt);
@@ -21,11 +29,9 @@ function World({ speed, daylight, fog, hasRunner }: { speed: number; daylight: b
   }, -1);
   return (
     <>
-      <color attach="background" args={[daylight ? "#d6dbc5" : "#253d48"]} />
-      <fog attach="fog" args={[daylight ? "#d6dbc5" : "#253d48", 20, 125 - Math.min(100, Math.max(0, fog)) * 0.5]} />
-      <hemisphereLight args={[daylight ? "#fff0ce" : "#adcce5", "#455749", daylight ? 2.2 : 1]} />
-      <directionalLight position={[-12, 18, -15]} intensity={daylight ? 3 : 0.7} color={daylight ? "#ffe0a0" : "#99bfe6"} castShadow shadow-mapSize={[1024, 1024]} shadow-camera-left={-18} shadow-camera-right={18} shadow-camera-top={24} shadow-camera-bottom={-18} shadow-camera-far={65} shadow-bias={-0.001} shadow-normalBias={0.04} />
-      <Landscape motion={motion} />
+      <Atmosphere conditions={conditions} atmosphereRef={atmosphere} snap={snap} />
+      <Landscape motion={motion} label={terrain} atmosphere={atmosphere} snap={snap} />
+      <WeatherEffects atmosphere={atmosphere} motion={motion} />
       {hasRunner && <TrailRunner motion={motion} />}
     </>
   );
@@ -37,7 +43,6 @@ export default function RunnerScene({ runner, environment, monologue, active }: 
   monologue?: string;
   active: boolean;
 }) {
-  const [paused, setPaused] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const [visible, setVisible] = useState(!document.hidden);
   const [expandedThought, setExpandedThought] = useState<string | null>(null);
   const expanded = expandedThought === (monologue ?? runner?.last_decision?.monologue);
@@ -47,6 +52,7 @@ export default function RunnerScene({ runner, environment, monologue, active }: 
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
   const speed = runnerSpeed(runner);
+  const conditions = sceneConditions(environment);
   const text = monologue ?? runner?.last_decision?.monologue;
   const long = (text?.length ?? 0) > 160;
   const excerpt = long && !expanded ? `${text!.slice(0, 157).replace(/\s+\S*$/, "")}…` : text;
@@ -55,15 +61,16 @@ export default function RunnerScene({ runner, environment, monologue, active }: 
     <div className="runner-scene">
       <Canvas
         shadows dpr={[1, 1.5]} camera={{ position: [4.2, 4.1, 9], fov: 46, near: 0.1, far: 190 }}
-        frameloop={active && visible && !paused ? "always" : "demand"}
+        frameloop={active && visible ? "always" : "demand"}
         gl={{ antialias: true, powerPreference: "low-power" }}
         onCreated={({ camera }) => camera.lookAt(0, 1.6, -5)}
         fallback={<div className="scene-placeholder">This browser cannot display 3D. The map is still available.</div>}
       >
-        <World hasRunner={Boolean(runner)} speed={speed} daylight={environment?.is_daylight ?? true} fog={environment?.fog_pct ?? 15} />
+        <World hasRunner={Boolean(runner)} speed={speed} conditions={conditions}
+          terrain={runner?.current_terrain} snap={!active || !visible} />
       </Canvas>
       <div className="scene-vignette" />
-      <div className="scene-kicker"><span className="scene-indicator" />Out on the trail <span>/ Runner view</span></div>
+      <div className="scene-kicker"><span className="scene-indicator" />{conditions.weather} <span>/ {environment?.local_time?.replace(/^Day \d+,\s*/, "") ?? "Runner view"}</span></div>
       {runner ? (
         <>
           <div className="runner-thought" key={runner.persona_name}>
@@ -71,12 +78,11 @@ export default function RunnerScene({ runner, environment, monologue, active }: 
             <p aria-live="polite">{excerpt || "Waiting for the first thought…"}</p>
             {long && <button type="button" onClick={() => setExpandedThought(expanded ? null : text ?? null)} aria-expanded={expanded}>{expanded ? "Less" : "Read full thought"}<span aria-hidden="true"> {expanded ? "−" : "+"}</span></button>}
           </div>
-          <div className="scene-runner-caption"><span className="scene-bib">{String(runner.bib_number).padStart(2, "0")}</span><div><strong>{runner.persona_name}</strong><span>Loop {runner.loop} · {runner.books_found} books found</span></div></div>
+          <div className="scene-runner-caption"><span className="scene-bib">{String(runner.bib_number).padStart(2, "0")}</span><div><strong>{runner.persona_name}</strong><span>Loop {runner.loop} · {runner.books_found} books found</span><span className="scene-terrain-label">{runner.current_terrain}</span></div></div>
         </>
       ) : <div className="scene-empty">A quiet trail. Start a run to meet your runner.</div>}
       <div className="scene-footer">
         <div><span className="scene-footer-label">{speed > 0 ? "Current pace" : "On the trail"}</span><span className="scene-pace">{runner ? speed > 0 ? `${runner.pace_min_per_km.toFixed(1)}` : "Resting" : "Waiting"}{speed > 0 && <small> min/km</small>}</span></div>
-        <button type="button" className="scene-pause" onClick={() => setPaused(!paused)} aria-label={paused ? "Play scene animation" : "Pause scene animation"}>{paused ? <Play size={15} /> : <Pause size={15} />}<span>{paused ? "Play scene" : "Pause scene"}</span></button>
       </div>
     </div>
   );

@@ -397,20 +397,6 @@ slide controls live outside either canvas. */
   font: 11px var(--font-sans);
   color: #ced7c4;
 }
-.scene-pause {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 9px 11px;
-  border: 1px solid #edf2d83b;
-  border-radius: 6px;
-  font-size: 10px;
-  background: #172c233d;
-  cursor: pointer;
-}
-.scene-pause:hover {
-  background: #172c2380;
-}
 .scene-empty {
   position: absolute;
   top: 22%;

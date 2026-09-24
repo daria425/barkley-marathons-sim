@@ -128,6 +128,10 @@ class Observation(BaseModel):
     last_ate_min_ago: int
     bearing_deg: float
     gps_guess: tuple[float, float]  # NOISY believed position
+    dist_to_trail_km: float  # raw distance to nearest trail point — continuous, never clamped
+                              # to the on/off-trail threshold, so it reads as a trend across
+                              # turns; terrain (below) alone can't tell the LLM a bearing is
+                              # working, since it's one fixed string for ANY off-trail distance
     terrain: str           # "thick briars", "creek crossing"
     weather: str
     books_found: int
@@ -143,6 +147,17 @@ class Decision(BaseModel):
     quit: bool
     monologue: str
 ```
+
+Two more fields exist only on the broadcast/wire state (`models.py`'s `RunnerState`/`FrozenHeadStatePark`), not on `Observation` — frontend-facing, not sent to the LLM:
+
+- `RunnerState.current_terrain: str` — same values as `Observation.terrain`, exposed under a
+  frontend-friendlier name for the watch-card/map UI (later phase).
+- `FrozenHeadStatePark.local_time: str` (e.g. `"Day 2, 3:15 AM ET"`) — the same
+  `start_hour`+`elapsed_min` math `Observation.clock_time` already uses, formatted as Frozen
+  Head State Park's real timezone (Tennessee is US Eastern). Deliberately **not** anchored to a
+  real `datetime.now()` — `sim/*.py` stays pure/deterministic (see "Explicit rng injection" and
+  "Pure sim state" ADRs), and the race has no real calendar date, only a race-day number; this
+  just labels the existing fictional hour-of-day with the real timezone it corresponds to.
 
 ## Physiology (keep simple, tune before adding LLM)
 
@@ -212,5 +227,6 @@ Per ADR-0007, steps 1–4 each get built as a sped-up, thin, end-to-end slice be
 
 - `physiology.py` stays pure and fully unit-tested (pytest).
 - API key via `ANTHROPIC_API_KEY` env var (and Langfuse keys), loaded via `.env`, never committed.
+- While working in the web/ directory (e.g developing the UI) use `npm run dev -- --mode dev --port 5174`. This starts a development server using .env.dev which sets ITE_USE_MOCK_DATA to true so that we can iterate without needing to run the API.
 - Log every Decision + Observation to SQLite — this is load-bearing for LLM memory and crash recovery, not just a replay nice-to-have.
 - For key decision moments use architecture-decision-records skill in order to log a change properly, in a new session check if a docs/adr directory exists already and read its files to get an overview of the project state

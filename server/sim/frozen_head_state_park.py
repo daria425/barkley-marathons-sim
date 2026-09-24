@@ -11,7 +11,7 @@ import random
 from dataclasses import dataclass
 
 from sim.sim_constants import TRANSITION_WEIGHTS, WEATHER_CONDITIONS, WEATHER_OFFSETS
-from sim.sim_utils import calculate_hour
+from sim.sim_utils import calculate_hour, format_local_time
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,7 @@ class FrozenHeadStatePark:
     is_daylight: bool
     fog_pct: float  # 0-100, feeds navigation noise later
     heat_index: int  # 0-10, this is the `heat` param physiology already consumes
+    local_time: str  # "Day 2, 3:15 AM ET" — frontend-facing, see format_local_time's docstring
 
 
 def compute_is_daylight(elapsed_min: float, start_hour: float) -> bool:
@@ -107,6 +108,7 @@ def tick(
         is_daylight=is_daylight,
         fog_pct=fog_pct,
         heat_index=heat_index,
+        local_time=format_local_time(start_hour, elapsed_min),
     )
 
 
@@ -127,4 +129,5 @@ def initial_state(start_hour: float = 6.0, rng: random.Random | None = None) -> 
         is_daylight=is_daylight,
         fog_pct=fog_pct,
         heat_index=heat_index,
+        local_time=format_local_time(start_hour, elapsed_time),
     )

@@ -6,7 +6,8 @@
     "temperature_c": 9.4,
     "is_daylight": true,
     "fog_pct": 46.2,
-    "heat_index": 1
+    "heat_index": 1,
+    "local_time": "Day 1, 4:23 PM ET"
   },
   "runners": {
     "Hank": {
@@ -21,8 +22,14 @@
         "start_core_temp_c": 37,
         "bonk_push_min": 0
       },
-      "true_pos": [36.12609154690915, -84.50453000000002],
-      "believed_pos": [36.13048, -84.51197],
+      "true_pos": [
+        36.12609154690915,
+        -84.50453000000002
+      ],
+      "believed_pos": [
+        36.13048,
+        -84.51197
+      ],
       "loop": 2,
       "books_found": 3,
       "pace_min_per_km": 16.4,
@@ -35,7 +42,8 @@
         "rest_min": 0,
         "quit": false,
         "monologue": "Ten hours in and the fog's not helping. I thought that ridge looked familiar but nothing out here looks familiar twice. Compass says I'm holding bearing, gut says I drifted west of the trail somewhere past the last book. Legs are heavy, not done-heavy, just tired-heavy. Ate, drank, kept moving. If the ground starts climbing again I'll know I'm back on line. If it doesn't, I'm trusting the compass over the gut. The gut's been wrong all night."
-      }
+      },
+      "current_terrain": "overgrown singletrack"
     }
   }
 }

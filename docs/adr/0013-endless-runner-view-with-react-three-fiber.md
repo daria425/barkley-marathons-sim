@@ -28,8 +28,11 @@ Simulation time acceleration is not multiplied into the character animation.
 
 The speech bubble shows an excerpt of the latest real monologue with an option to
 expand it. The full feed remains beside the viewer. Hidden scenes/tabs suspend the
-continuous render loop; reduced-motion preference starts the scene paused, with a
-local play/pause control. The map remains mounted to preserve its camera position.
+continuous render loop. The map remains mounted to preserve its camera position.
+
+**2026-09-24 review update:** Daria requested removal of the local play/pause control.
+The visible scene now animates automatically, including when reduced motion is enabled;
+the slider transition still respects reduced motion. Hidden scenes/tabs suspend rendering.
 
 ## Alternatives Considered
 

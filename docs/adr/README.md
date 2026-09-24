@@ -14,3 +14,5 @@
 | [0010](0010-free-2d-navigation-and-book-scoping.md) | Free 2D navigation in `sim/course.py`, and books as a proximity counter | accepted | 2026-09-18 |
 | [0011](0011-api-ws-wiring-via-on-update-callback.md) | v1's FastAPI + WebSocket surface wired via an optional `on_update` callback | accepted | 2026-09-21 |
 | [0012](0012-batched-memory-compaction.md) | Batch memory compaction instead of folding one turn per tick | accepted | 2026-09-22 |
+| [0013](0013-endless-runner-view-with-react-three-fiber.md) | Endless runner scene beside the map with React Three Fiber | accepted | 2026-09-23 |
+| [0014](0014-composable-terrain-weather-and-park-time.md) | Compose terrain, weather, and park time in the runner scene | accepted | 2026-09-23 |
