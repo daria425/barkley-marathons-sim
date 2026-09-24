@@ -5,6 +5,8 @@ dataclasses; these models embed those dataclasses as fields rather than duplicat
 their shape. Pydantic v2 validates/serializes stdlib dataclasses natively.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 from sim.frozen_head_state_park import FrozenHeadStatePark
@@ -25,6 +27,8 @@ class Observation(BaseModel):
     dist_to_trail_km: float  # raw distance to nearest trail point — continuous, not clamped
     # to the on/off-trail threshold, so it reads as a trend across turns rather than a flip
     terrain: str  # "thick briars", "creek crossing"
+    # only "found_book" exists so far; add more values here as other trigger events land
+    event: Literal["found_book"] | None
     weather: str
     books_found: int
     loop: int

@@ -82,7 +82,10 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
     const map = new MapLibreMap({
       container: containerRef.current,
       style: STYLE_URL,
-      center: [-84.73, 36.13], // Frozen Head State Park, TN
+      // Placeholder only — corrected the moment the course or a runner arrives below.
+      // Not the true course center (this GPX loop actually sits ~20km east of the park's
+      // main entrance), so leaving this uncorrected leaves the polyline/books off-screen.
+      center: [-84.73, 36.13],
       zoom: 12,
     });
     mapRef.current = map;
@@ -182,6 +185,20 @@ export function RaceMap({ runners }: { runners: Record<string, RunnerState> }) {
         if (cancelled) return;
         const source = map.getSource(COURSE_SOURCE_ID) as GeoJSONSource;
         source.setData(toCourseFeatureCollection(course));
+        // Frame the course itself if no runner has claimed the view yet — otherwise the
+        // polyline/books only ever appear once a runner's true_pos happens to land near the
+        // hardcoded placeholder center above, which isn't guaranteed for every course file.
+        if (!hasFramedRunner.current && course.points.length > 0) {
+          const lons = course.points.map(([, lon]) => lon);
+          const lats = course.points.map(([lat]) => lat);
+          map.fitBounds(
+            [
+              [Math.min(...lons), Math.min(...lats)],
+              [Math.max(...lons), Math.max(...lats)],
+            ],
+            { padding: 40, duration: 0 },
+          );
+        }
       });
 
       // Real Barkley rule (ADR-0010): a book's page has to match your bib number to count —

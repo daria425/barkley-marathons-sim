@@ -160,15 +160,18 @@ def advance_position(
 
 def books_found_this_tick(
     course: Course, pos: tuple[float, float], already_found: frozenset[int]
-) -> frozenset[int]:
+) -> tuple[frozenset[int], bool]:
     found = set(already_found)
+    has_found_new = False
     for book in course.books:
         if (
             book.index not in found
             and haversine(pos, (book.lat, book.lon), unit=Unit.KILOMETERS) <= BOOK_PROXIMITY_KM
         ):
             found.add(book.index)
-    return frozenset(found)
+            has_found_new = True
+
+    return frozenset(found), has_found_new
 
 
 def loop_completed(

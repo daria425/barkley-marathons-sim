@@ -26,8 +26,9 @@ from sim.sim_utils import format_clock_time
 # broadcaster. None (the default) keeps the CLI/smoke-test/test_resume.py path unaffected.
 OnUpdate = Callable[[RaceState], Awaitable[None]]
 
-# Every tick spawns a brain call (no gating by trigger events yet — see CLAUDE.md's "N is not
-# decided yet"), and real wall-clock time between ticks is TICK_DT_MIN * 60s (at speed=1).
+# Every tick spawns a brain call, deliberately not gated by trigger events (ADR-0015) — trigger
+# moments like book-found are surfaced via Observation.event instead of call scheduling. Real
+# wall-clock time between ticks is TICK_DT_MIN * 60s (at speed=1).
 TICK_DT_MIN = 0.25
 
 # Race length in sim-minutes. Real target per CLAUDE.md ("60-hour cutoff"). run()'s
@@ -199,7 +200,7 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
         state.loop += 1
         state.dist_since_loop_start_km = 0.0
         state.books_collected = frozenset()
-    state.books_collected = course_mod.books_found_this_tick(
+    state.books_collected, has_found_new_book = course_mod.books_found_this_tick(
         the_course, state.true_pos, state.books_collected
     )
     state.believed_pos = course_mod.believed_position(
@@ -222,6 +223,7 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
         state.books_collected,
         state.last_ate_min_ago,
         pace,
+        has_found_new_book,
     )
 
 
@@ -366,8 +368,13 @@ def _build_observation(
     books_collected: frozenset[int],
     last_ate_min_ago: float,
     pace: float,
+    has_found_new_book: bool,
 ) -> Observation:
     collapsed = physiology.has_collapsed(physio.bonk_push_min)
+    event = None
+    if has_found_new_book:
+        event = "found_book"
+    # do something else for other events IF we add them
     return Observation(
         elapsed_min=round(physio.elapsed_min),
         clock_time=format_clock_time(start_hour, physio.elapsed_min),
@@ -384,6 +391,7 @@ def _build_observation(
         books_found=len(books_collected),
         loop=loop,
         hallucination=None,
+        event=event,
     )
 
 

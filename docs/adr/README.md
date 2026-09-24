@@ -16,3 +16,4 @@
 | [0012](0012-batched-memory-compaction.md) | Batch memory compaction instead of folding one turn per tick | accepted | 2026-09-22 |
 | [0013](0013-endless-runner-view-with-react-three-fiber.md) | Endless runner scene beside the map with React Three Fiber | accepted | 2026-09-23 |
 | [0014](0014-composable-terrain-weather-and-park-time.md) | Compose terrain, weather, and park time in the runner scene | accepted | 2026-09-23 |
+| [0015](0015-per-tick-brain-cadence-and-book-found-event.md) | Per-tick brain-call cadence, with book-found surfaced via `Observation.event` | accepted | 2026-09-24 |

@@ -140,6 +140,8 @@ def format_observation(obs: Observation) -> str:
         f"Distance to trail: {obs.dist_to_trail_km:.2f}km.",
         f"Terrain: {obs.terrain}. Weather: {obs.weather}.",
     ]
+    if obs.event == "found_book":
+        lines.append(f"You just found a book at {obs.gps_guess}!")
     return "\n".join(lines)
 
 

@@ -88,7 +88,7 @@ Kept in mind for config decisions now, not built yet:
 
 - The loop ticks independently (1 tick = 1 sim-minute, with a speed multiplier of 1x/60x/600x).
 - Each runner keeps executing its **last decision** until a new one arrives.
-- Brain calls fire async via `asyncio.create_task`, either every N sim-minutes or on trigger events: fall, lost, bonk, book found, loop complete, quit consideration. **N is not decided yet** — pick it during Phase 1 planning, not before.
+- Brain calls fire async via `asyncio.create_task` on **every tick** (`TICK_DT_MIN`, currently 0.25 sim-min) — not gated by trigger events (ADR-0015). Trigger-worthy moments (book found, and later fall/lost/bonk/loop complete/quit consideration) don't get separate call scheduling; they're surfaced via `Observation.event`, a `Literal` flag the already-every-tick Observation carries. A full 60h race is ~14,400 calls/runner — a known, accepted cost for v1 (see ADR-0015's consequences), not a placeholder.
 - Cap concurrency with `asyncio.Semaphore(5)` — built now even though v1 has one runner, so multi-persona later is just raising N, not re-architecting.
 - If the LLM call fails or returns invalid JSON, catch the error, **keep the old decision**, and log a funny line ("runner mumbles incoherently"). No retries — try again on the next scheduled thought. This is also **persisted, not just printed**: `agents/participant.py`'s `decide()` returns a `BrainOutcome(decision, failure_reason)`, and `db.py`'s `turns.failure_reason` column records why (for us to debug later — `db.get_failures()` — never shown to the LLM; `get_recent_turns`/`get_all_turns` still only ever select rows with a real decision).
 
@@ -211,6 +211,44 @@ The LLM needs continuity — it can't reason about "wtf happened before" without
 Each numbered phase gets its own plan-mode check-in before code starts, per "How we work together" above.
 
 Per ADR-0007, steps 1–4 each get built as a sped-up, thin, end-to-end slice before the next step starts — not fully fleshed out first. Step 5 ("let it rip") is where the whole chain switches to real scope: 1x realtime, the full 60h cutoff, the full persona roster.
+
+## Live Testing
+
+How to run a slice as close to the real v1 contract as practical — through `main.py`'s actual
+REST+WS surface (CLAUDE.md's "v1's API surface"), Langfuse-traced, not the narrower CLI-only
+paths. Two things exist that look like shortcuts but aren't: `python -m scripts.smoke_test` is
+CLI-only (no WS to watch live), and `sim/loop.py`'s own `__main__` (`--fresh`) never calls
+`setup_observability()` before `agents/participant.py` builds its `AsyncAnthropic` client at
+import time, so calls run **untraced** through that path (ADR-0006's ordering requirement) — use
+it only for quick non-traced iteration, never for a live test you actually want in Langfuse.
+
+1. **Remove the existing DB** so this run starts a fresh race instead of resuming the last
+   checkpoint (resuming-if-present is correct behavior otherwise, ADR-0008/0009 — this step is
+   what opts out of it for a clean test):
+   ```
+   rm -f server/smoke_test.db
+   ```
+2. **Start the real server** (from `server/`, `.env` populated per Conventions):
+   ```
+   uv run uvicorn main:app --reload
+   ```
+3. **Kick off a bounded, sped-up run** — capped well under the full 60h race so it finishes in a
+   watchable amount of wall-clock time, while every other mechanic (per-tick brain calls,
+   physiology, weather, navigation noise, book events per ADR-0015) runs exactly as it would at
+   full scope:
+   ```
+   curl -X POST "http://localhost:8000/run?speed=20&duration_min=75"
+   ```
+   `speed`/`duration_min` are request params, not code — adjust per test (e.g. lower `speed` to
+   read monologues as they scroll, raise `duration_min` to watch more loop/book behavior).
+4. **Watch it live** over the WS the frontend will eventually consume:
+   ```
+   websocat ws://localhost:8000/ws
+   ```
+   Streams `RaceState` every tick, plus the updated `RunnerState` whenever a brain call lands.
+5. **Inspect afterward** in `server/smoke_test.db`: `turns` for the full Observation/Decision
+   history and any `failure_reason`s (`db.get_failures()`), `checkpoints` for the latest resumable
+   state — plus the Anthropic call traces in the Langfuse project dashboard (`LANGFUSE_BASE_URL`).
 
 ## Linting & code style
 
