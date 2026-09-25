@@ -70,3 +70,16 @@ BRIAR_CHANCE_PER_TICK = 0.04
 WILDLIFE_CHANCE_PER_TICK = 0.006  # night only, any terrain
 
 BOTTLE_DROP_CHANCE_PER_TICK = 0.002  # ungated — any terrain, any time
+
+# Sleep-debt hallucinations (ADR-0001/ADR-0008/ADR-0017): gated by elapsed_min alone (no
+# separate sleep_debt field — same fatigue-proxy reasoning as NOISE_FATIGUE_PER_HOUR_KM above).
+# Severity ramps 0.0 -> 1.0 between onset and cap, and drives both Observation.hallucination's
+# per-tick chance and how badly a just-folded compaction segment gets jumbled.
+#
+# CLAUDE.md/ADR-0001's real target is "past ~40h" (2400 min) for a full 60h race; these are
+# deliberately lower for dev-slice testing (a 75-min/300-tick run can actually trigger them) —
+# flip to the commented-out "real" values once running full-length races.
+HALLUCINATION_ONSET_MIN = 60.0  # real target: 40 * 60 = 2400.0
+HALLUCINATION_RAMP_MIN = 240.0  # real target: 55 * 60 = 3300.0
+HALLUCINATION_MAX_CHANCE_PER_TICK = 0.02
+JUMBLE_MAX_SEVERITY = 0.6  # cap so a jumbled segment stays legible-if-unreliable, not pure noise

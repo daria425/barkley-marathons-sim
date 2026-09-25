@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sim.frozen_head_state_park import FrozenHeadStatePark
 from sim.physiology import PhysiologyState
 
-# Single event per tick (see ADR-0015/ADR-00XX) — detectors run in a fixed priority order and
+# Single event per tick (see ADR-0015/ADR-0016) — detectors run in a fixed priority order and
 # the first hit wins. Add new values here as other trigger events land.
 EventType = Literal[
     "found_book",
@@ -74,6 +74,9 @@ class RunnerState(BaseModel):
     # most recent Observation.event, mirrored onto the wire for frontend consumption — not
     # rendered yet, just made available (no UI hookup in this phase)
     last_event: EventType | None = None
+    # most recent Observation.hallucination, mirrored the same way (ADR-0017) — free text, not
+    # a Literal, since hallucination lines are curated prose, not a small fixed vocabulary
+    last_hallucination: str | None = None
 
 
 class Checkpoint(BaseModel):

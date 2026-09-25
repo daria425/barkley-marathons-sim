@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from models import Decision, Observation
+from sim import hallucinations
 
 # Single source of truth for the window size, not overridden per-caller. A tuning constant,
 # not a documented spec — pick whatever value exercises compaction usefully for a given run.
@@ -171,7 +172,14 @@ def render_segment(facts: SegmentFacts) -> str:
 
 
 def compact_segment(turns: list[tuple[Observation, Decision]]) -> str:
-    return render_segment(extract_segment_facts(turns))
+    """ADR-0017: the segment is jumbled once, at fold time, based on severity at the segment's
+    own end — not re-jumbled on every subsequent compaction — so a summary reads accurately for
+    the early race and only degrades toward however far sleep debt had climbed when each chunk
+    was folded. jumble_text is a pure function of (text, severity), so this stays deterministic
+    and resume-safe (ADR-0008/0009)."""
+    text = render_segment(extract_segment_facts(turns))
+    end_elapsed_min = turns[-1][0].elapsed_min
+    return hallucinations.jumble_text(text, hallucinations.jumble_severity_for(end_elapsed_min))
 
 
 def format_observation(obs: Observation) -> str:
@@ -193,6 +201,8 @@ def format_observation(obs: Observation) -> str:
         lines.append(f"You just found a book at {obs.gps_guess}!")
     elif obs.event is not None and obs.event in _EVENT_PROMPT_LINES:
         lines.append(_EVENT_PROMPT_LINES[obs.event])
+    if obs.hallucination is not None:
+        lines.append(obs.hallucination)
     return "\n".join(lines)
 
 

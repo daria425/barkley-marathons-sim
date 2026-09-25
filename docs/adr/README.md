@@ -18,3 +18,4 @@
 | [0014](0014-composable-terrain-weather-and-park-time.md) | Compose terrain, weather, and park time in the runner scene | accepted | 2026-09-23 |
 | [0015](0015-per-tick-brain-cadence-and-book-found-event.md) | Per-tick brain-call cadence, with book-found surfaced via `Observation.event` | accepted | 2026-09-24 |
 | [0016](0016-generalized-special-event-system.md) | Generalized special-event system, extending `Observation.event` past `found_book` | accepted | 2026-09-25 |
+| [0017](0017-sleep-debt-hallucinations.md) | Sleep-debt hallucinations — free-text `Observation.hallucination` plus jumbled compaction memory | accepted | 2026-09-25 |

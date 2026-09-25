@@ -11,6 +11,11 @@ export interface EventEntry {
   event: NonNullable<RunnerState["last_event"]>;
 }
 
+export interface HallucinationEntry {
+  elapsedMin: number;
+  text: string;
+}
+
 interface RaceSliceState {
   elapsedMin: number;
   environment: FrozenHeadStatePark | null;
@@ -21,6 +26,8 @@ interface RaceSliceState {
   // Same pattern as `monologues`, tracking RunnerState.last_event changes. Not rendered yet —
   // just made available to consumers (CLAUDE.md's event-emitter phase).
   events: Record<string, EventEntry[]>;
+  // Same pattern again, tracking RunnerState.last_hallucination (ADR-0017). Not rendered yet.
+  hallucinations: Record<string, HallucinationEntry[]>;
 }
 
 const initialState: RaceSliceState = {
@@ -29,6 +36,7 @@ const initialState: RaceSliceState = {
   runners: {},
   monologues: {},
   events: {},
+  hallucinations: {},
 };
 
 const raceSlice = createSlice({
@@ -54,6 +62,14 @@ const raceSlice = createSlice({
           (state.events[name] ??= []).push({
             elapsedMin: next.elapsed_min,
             event: nextEvent,
+          });
+        }
+        const prevHallucination = state.runners[name]?.last_hallucination;
+        const nextHallucination = runner.last_hallucination;
+        if (nextHallucination && nextHallucination !== prevHallucination) {
+          (state.hallucinations[name] ??= []).push({
+            elapsedMin: next.elapsed_min,
+            text: nextHallucination,
           });
         }
       }

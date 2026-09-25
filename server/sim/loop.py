@@ -18,7 +18,7 @@ from agents.participant import Participant
 from agents.personas import load_persona
 from models import Checkpoint, Decision, Observation, RaceState, RunnerState
 from sim import course as course_mod
-from sim import frozen_head_state_park, physiology
+from sim import frozen_head_state_park, hallucinations, physiology
 from sim.sim_utils import format_clock_time
 
 # Called once per tick with the current RaceState, and again (with an updated RunnerState
@@ -221,6 +221,8 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
         special_event = course_mod.detect_special_event(
             terrain, grade_pct, state.park.is_daylight, state.rng
         )
+    # Independent of event — a sleep-deprived hallucination and a book find/trip can coincide.
+    hallucination = hallucinations.roll(state.physio.elapsed_min, state.rng)
 
     return _build_observation(
         the_course,
@@ -237,6 +239,7 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
         has_found_new_book,
         terrain,
         special_event,
+        hallucination,
     )
 
 
@@ -357,6 +360,7 @@ def _build_runner_state(
         feel=obs.feel,
         last_decision=decision,
         last_event=obs.event,
+        last_hallucination=obs.hallucination,
     )
 
 
@@ -385,6 +389,7 @@ def _build_observation(
     has_found_new_book: bool,
     terrain: str,
     special_event: str | None,
+    hallucination: str | None,
 ) -> Observation:
     collapsed = physiology.has_collapsed(physio.bonk_push_min)
     event = "found_book" if has_found_new_book else special_event
@@ -403,7 +408,7 @@ def _build_observation(
         weather=park.weather,
         books_found=len(books_collected),
         loop=loop,
-        hallucination=None,
+        hallucination=hallucination,
         event=event,
     )
 

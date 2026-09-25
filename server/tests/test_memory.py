@@ -9,11 +9,13 @@ math.
 from agents.memory import (
     SLIDING_WINDOW_N,
     compact_if_needed,
+    compact_segment,
     extract_segment_facts,
     format_observation,
     render_segment,
 )
 from models import Decision, Observation
+from sim.sim_constants import HALLUCINATION_RAMP_MIN
 
 
 def make_turn(
@@ -27,6 +29,7 @@ def make_turn(
     quit: bool = False,
     monologue: str = "",
     event: str | None = None,
+    hallucination: str | None = None,
 ) -> tuple[Observation, Decision]:
     obs = Observation(
         elapsed_min=elapsed_min,
@@ -43,7 +46,7 @@ def make_turn(
         weather="clear",
         books_found=books_found,
         loop=loop,
-        hallucination=None,
+        hallucination=hallucination,
         event=event,
     )
     decision = Decision(
@@ -189,6 +192,33 @@ def test_format_observation_omits_event_line_when_none():
     assert "puddle" not in text
     assert "tripped" not in text
     assert "just found a book" not in text
+
+
+def test_format_observation_includes_hallucination_line_verbatim():
+    obs, _ = make_turn(0, hallucination="You see a bear watching you from the ridge.")
+    assert "You see a bear watching you from the ridge." in format_observation(obs)
+
+
+def test_format_observation_omits_hallucination_line_when_none():
+    obs, _ = make_turn(0, hallucination=None)
+    assert "bear" not in format_observation(obs)
+
+
+def test_compact_segment_stays_clean_before_hallucination_onset():
+    """Well below HALLUCINATION_ONSET_MIN, jumble_severity_for is 0 — compact_segment must be
+    exactly render_segment's output, untouched."""
+    turns = [make_turn(0, monologue="feeling strong"), make_turn(1, monologue="still strong")]
+    assert compact_segment(turns) == render_segment(extract_segment_facts(turns))
+
+
+def test_compact_segment_jumbles_once_sleep_debt_has_climbed():
+    """Well past HALLUCINATION_RAMP_MIN, the rendered segment should read differently from the
+    clean render_segment output — the whole point of ADR-0017's memory-degradation mechanic."""
+    late = HALLUCINATION_RAMP_MIN * 2
+    turns = [
+        make_turn(late, monologue="ate 3x and drank 4x, found 2 books, feeling strong out here")
+    ]
+    assert compact_segment(turns) != render_segment(extract_segment_facts(turns))
 
 
 def test_compact_if_needed_leaves_short_history_untouched():

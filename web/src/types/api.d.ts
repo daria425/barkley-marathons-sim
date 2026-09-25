@@ -227,6 +227,8 @@ export interface components {
             last_decision?: components["schemas"]["Decision"] | null;
             /** Last Event */
             last_event?: ("found_book" | "tripped_and_fell" | "stepped_in_puddle" | "briar_scratch" | "spooked_by_wildlife" | "dropped_water_bottle") | null;
+            /** Last Hallucination */
+            last_hallucination?: string | null;
         };
         /** ValidationError */
         ValidationError: {
