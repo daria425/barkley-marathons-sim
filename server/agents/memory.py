@@ -6,6 +6,7 @@ template over extracted facts), not an LLM call — this module owns both the sl
 replay and the compaction, and both are pure/unit-testable.
 """
 
+from collections import Counter
 from dataclasses import dataclass
 
 from models import Decision, Observation
@@ -32,6 +33,24 @@ _COLLAPSED_FEEL = "collapsed, body won't listen anymore"
 _BONKING_FEEL = "bonking"
 _FEEL_SEVERITY = {"feeling good": 0, "legs heavy": 1, _BONKING_FEEL: 2, _COLLAPSED_FEEL: 3}
 
+# Prose for non-book events, shared between format_observation (in-the-moment, present tense)
+# and render_segment (retrospective, past tense) — found_book is handled separately in both
+# since books_found_delta already covers it in the summary.
+_EVENT_PROMPT_LINES = {
+    "tripped_and_fell": "You just tripped and fell hard on the trail!",
+    "stepped_in_puddle": "You just stepped ankle-deep into a puddle.",
+    "briar_scratch": "A thicket of briars just tore into your arm.",
+    "spooked_by_wildlife": "Something rustled in the dark and spooked you badly.",
+    "dropped_water_bottle": "You just fumbled and dropped your water bottle.",
+}
+_EVENT_SUMMARY_PHRASES = {
+    "tripped_and_fell": "tripped and fell",
+    "stepped_in_puddle": "stepped in a puddle",
+    "briar_scratch": "got torn up by briars",
+    "spooked_by_wildlife": "got spooked by wildlife",
+    "dropped_water_bottle": "dropped a water bottle",
+}
+
 
 @dataclass(frozen=True)
 class SegmentFacts:
@@ -50,28 +69,47 @@ class SegmentFacts:
     total_rest_min: int
     quit_considered: bool
     highlight_monologue: str
+    # Non-book event counts in this segment (e.g. {"tripped_and_fell": 2}) — found_book is
+    # excluded since books_found_delta already captures it. Otherwise these vanish silently
+    # once their turn ages out of the sliding window.
+    event_counts: dict[str, int]
 
 
-def _pick_highlight_turn(
-    turns: list[tuple[Observation, Decision]],
-) -> tuple[Observation, Decision]:
-    """The most narratively "eventful" turn in the segment, in priority order: seriously
-    considering quitting beats collapsing beats bonking beats finding a book beats nothing
-    happening (falls back to the most recent turn)."""
+_Turn = tuple[Observation, Decision]
+
+
+def _first_matching(turns: list[_Turn], predicate) -> _Turn | None:
     for obs, decision in turns:
-        if decision.quit:
+        if predicate(obs, decision):
             return obs, decision
-    for obs, decision in turns:
-        if obs.feel == _COLLAPSED_FEEL:
-            return obs, decision
-    for obs, decision in turns:
-        if obs.feel == _BONKING_FEEL:
-            return obs, decision
+    return None
+
+
+def _first_book_found_turn(turns: list[_Turn]) -> _Turn | None:
     prev_books = turns[0][0].books_found
     for obs, decision in turns[1:]:
         if obs.books_found > prev_books:
             return obs, decision
         prev_books = obs.books_found
+    return None
+
+
+def _pick_highlight_turn(turns: list[_Turn]) -> _Turn:
+    """The most narratively "eventful" turn in the segment, in priority order: seriously
+    considering quitting beats collapsing beats bonking beats finding a book beats another
+    special event (trip/puddle/etc.) beats nothing happening (falls back to the most recent
+    turn)."""
+    candidates = (
+        lambda: _first_matching(turns, lambda o, d: d.quit),
+        lambda: _first_matching(turns, lambda o, d: o.feel == _COLLAPSED_FEEL),
+        lambda: _first_matching(turns, lambda o, d: o.feel == _BONKING_FEEL),
+        lambda: _first_book_found_turn(turns),
+        lambda: _first_matching(turns, lambda o, d: o.event not in (None, "found_book")),
+    )
+    for find in candidates:
+        match = find()
+        if match is not None:
+            return match
     return turns[-1]
 
 
@@ -80,6 +118,9 @@ def extract_segment_facts(turns: list[tuple[Observation, Decision]]) -> SegmentF
     summary this compaction cycle."""
     feels = [obs.feel for obs, _ in turns]
     _, highlight_decision = _pick_highlight_turn(turns)
+    event_counts = Counter(
+        obs.event for obs, _ in turns if obs.event is not None and obs.event != "found_book"
+    )
     return SegmentFacts(
         start_clock=turns[0][0].clock_time,
         end_clock=turns[-1][0].clock_time,
@@ -91,6 +132,7 @@ def extract_segment_facts(turns: list[tuple[Observation, Decision]]) -> SegmentF
         total_rest_min=sum(d.rest_min for _, d in turns),
         quit_considered=any(d.quit for _, d in turns),
         highlight_monologue=highlight_decision.monologue,
+        event_counts=dict(event_counts),
     )
 
 
@@ -113,10 +155,17 @@ def render_segment(facts: SegmentFacts) -> str:
     if facts.total_rest_min:
         food_phrase += f", rested {facts.total_rest_min:.0f}m"
     quit_phrase = " Seriously considered quitting." if facts.quit_considered else ""
+    events_phrase = ""
+    if facts.event_counts:
+        parts = [
+            _EVENT_SUMMARY_PHRASES.get(name, name) + (f" x{count}" if count > 1 else "")
+            for name, count in facts.event_counts.items()
+        ]
+        events_phrase = " Also: " + ", ".join(parts) + "."
 
     return (
         f"From {facts.start_clock} to {facts.end_clock} (loop {facts.loop}): "
-        f"{books_phrase}, {feel_phrase}, {food_phrase}.{quit_phrase} "
+        f"{books_phrase}, {feel_phrase}, {food_phrase}.{quit_phrase}{events_phrase} "
         f'"{facts.highlight_monologue}"'
     )
 
@@ -142,6 +191,8 @@ def format_observation(obs: Observation) -> str:
     ]
     if obs.event == "found_book":
         lines.append(f"You just found a book at {obs.gps_guess}!")
+    elif obs.event is not None and obs.event in _EVENT_PROMPT_LINES:
+        lines.append(_EVENT_PROMPT_LINES[obs.event])
     return "\n".join(lines)
 
 

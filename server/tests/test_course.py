@@ -71,12 +71,14 @@ def test_dist_to_trail_km_grows_with_distance_unlike_terrain_text():
 
 def test_books_found_this_tick_is_monotonic_and_proximity_triggered():
     book = COURSE.books[0]
-    found = course.books_found_this_tick(COURSE, (book.lat, book.lon), frozenset())
+    found, has_found_new = course.books_found_this_tick(COURSE, (book.lat, book.lon), frozenset())
     assert book.index in found
+    assert has_found_new
 
     far_away = (COURSE.points[0].lat + 1.0, COURSE.points[0].lon + 1.0)
-    still_found = course.books_found_this_tick(COURSE, far_away, found)
+    still_found, has_found_new_again = course.books_found_this_tick(COURSE, far_away, found)
     assert found <= still_found  # never loses a previously found book
+    assert not has_found_new_again
 
 
 def test_loop_not_completed_near_start_before_covering_distance():
@@ -88,6 +90,76 @@ def test_loop_completed_once_distance_covered_and_back_near_start():
     start = course.start_coords(COURSE)
     halfway = COURSE.total_km * course.LOOP_COMPLETE_MIN_FRACTION
     assert course.loop_completed(COURSE, start, dist_since_loop_start_km=halfway)
+
+
+def test_detect_special_event_never_fires_on_ungated_terrain_with_zero_chance():
+    """With every gated chance zeroed via monkeypatched rng (always returns 1.0, above any
+    threshold), only the ungated dropped_water_bottle check could ever fire — and it won't
+    either, since 1.0 is never < any probability. Confirms gating actually gates."""
+
+    class _AlwaysOne:
+        def random(self):
+            return 1.0
+
+    result = course.detect_special_event(
+        terrain="thick briars", grade_pct=0.0, is_daylight=True, rng=_AlwaysOne()
+    )
+    assert result is None
+
+
+def test_detect_special_event_fires_on_qualifying_terrain_with_favorable_rng():
+    class _AlwaysZero:
+        def random(self):
+            return 0.0
+
+    assert (
+        course.detect_special_event("steep scree", 0.0, True, rng=_AlwaysZero())
+        == "tripped_and_fell"
+    )
+    assert (
+        course.detect_special_event("creek crossing", 0.0, True, rng=_AlwaysZero())
+        == "stepped_in_puddle"
+    )
+    assert (
+        course.detect_special_event("thick briars", 0.0, True, rng=_AlwaysZero()) == "briar_scratch"
+    )
+    assert (
+        course.detect_special_event("gravel road, gentle climb", 0.0, False, rng=_AlwaysZero())
+        == "spooked_by_wildlife"
+    )
+
+
+def test_detect_special_event_falls_through_to_bottle_drop_when_ungated_only():
+    class _AlwaysZero:
+        def random(self):
+            return 0.0
+
+    # daylight + terrain that qualifies for nothing gated — only the ungated check can fire
+    assert (
+        course.detect_special_event("gravel road, gentle climb", 0.0, True, rng=_AlwaysZero())
+        == "dropped_water_bottle"
+    )
+
+
+def test_detect_special_event_steep_grade_counts_as_trip_prone_even_off_labeled_terrain():
+    class _AlwaysZero:
+        def random(self):
+            return 0.0
+
+    result = course.detect_special_event(
+        "gravel road, gentle climb", grade_pct=20.0, is_daylight=True, rng=_AlwaysZero()
+    )
+    assert result == "tripped_and_fell"
+
+
+def test_detect_special_event_is_deterministic_for_a_given_rng_state():
+    rng_a = Random(5)
+    rng_b = Random(5)
+    results = [course.detect_special_event("thick briars", 0.0, True, rng_a) for _ in range(50)]
+    results_again = [
+        course.detect_special_event("thick briars", 0.0, True, rng_b) for _ in range(50)
+    ]
+    assert results == results_again
 
 
 def test_believed_position_noise_grows_with_fog_and_night():

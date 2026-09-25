@@ -40,6 +40,7 @@ def _obs() -> Observation:
         books_found=0,
         loop=1,
         hallucination=None,
+        event=None,
     )
 
 

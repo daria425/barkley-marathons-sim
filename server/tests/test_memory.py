@@ -10,6 +10,8 @@ from agents.memory import (
     SLIDING_WINDOW_N,
     compact_if_needed,
     extract_segment_facts,
+    format_observation,
+    render_segment,
 )
 from models import Decision, Observation
 
@@ -24,6 +26,7 @@ def make_turn(
     rest_min: int = 0,
     quit: bool = False,
     monologue: str = "",
+    event: str | None = None,
 ) -> tuple[Observation, Decision]:
     obs = Observation(
         elapsed_min=elapsed_min,
@@ -41,6 +44,7 @@ def make_turn(
         books_found=books_found,
         loop=loop,
         hallucination=None,
+        event=event,
     )
     decision = Decision(
         effort=5,
@@ -125,6 +129,66 @@ def test_highlight_prefers_bonk_over_book():
 def test_highlight_falls_back_to_last_turn_when_nothing_eventful():
     turns = [make_turn(0, monologue="fine"), make_turn(1, monologue="still fine")]
     assert extract_segment_facts(turns).highlight_monologue == "still fine"
+
+
+def test_event_counts_tallies_non_book_events_and_excludes_found_book():
+    turns = [
+        make_turn(0, event="found_book"),
+        make_turn(1, event="tripped_and_fell"),
+        make_turn(2, event="tripped_and_fell"),
+        make_turn(3, event="stepped_in_puddle"),
+        make_turn(4, event=None),
+    ]
+    facts = extract_segment_facts(turns)
+    assert facts.event_counts == {"tripped_and_fell": 2, "stepped_in_puddle": 1}
+
+
+def test_highlight_prefers_special_event_over_fallback():
+    turns = [
+        make_turn(0, monologue="fine"),
+        make_turn(1, event="briar_scratch", monologue="ouch, briars"),
+        make_turn(2, monologue="still fine"),
+    ]
+    assert extract_segment_facts(turns).highlight_monologue == "ouch, briars"
+
+
+def test_highlight_prefers_book_over_special_event():
+    turns = [
+        make_turn(0, books_found=0),
+        make_turn(1, books_found=1, monologue="found a book!"),
+        make_turn(2, event="briar_scratch", monologue="ouch, briars"),
+    ]
+    assert extract_segment_facts(turns).highlight_monologue == "found a book!"
+
+
+def test_render_segment_mentions_special_events_with_counts():
+    turns = [
+        make_turn(0, event="tripped_and_fell"),
+        make_turn(1, event="tripped_and_fell"),
+        make_turn(2, event="stepped_in_puddle"),
+    ]
+    text = render_segment(extract_segment_facts(turns))
+    assert "tripped and fell x2" in text
+    assert "stepped in a puddle" in text
+
+
+def test_render_segment_has_no_events_clause_when_nothing_happened():
+    turns = [make_turn(0), make_turn(1)]
+    text = render_segment(extract_segment_facts(turns))
+    assert "Also:" not in text
+
+
+def test_format_observation_includes_special_event_line():
+    obs, _ = make_turn(0, event="stepped_in_puddle")
+    assert "puddle" in format_observation(obs)
+
+
+def test_format_observation_omits_event_line_when_none():
+    obs, _ = make_turn(0, event=None)
+    text = format_observation(obs)
+    assert "puddle" not in text
+    assert "tripped" not in text
+    assert "just found a book" not in text
 
 
 def test_compact_if_needed_leaves_short_history_untouched():

@@ -28,7 +28,8 @@ N_BOOKS = 13  # matches the real Barkley's book count
 BOOK_PROXIMITY_KM = 0.05  # how close you need to walk to a book to find it
 TRAIL_PROXIMITY_KM = 0.1  # beyond this from the nearest trail point, you're "off trail"
 LOOP_COMPLETE_RADIUS_KM = 0.1
-LOOP_COMPLETE_MIN_FRACTION = 0.5  # must have covered at least half the loop to "complete" it
+# must have covered at least half the loop to "complete" it
+LOOP_COMPLETE_MIN_FRACTION = 0.5
 
 # Believed-position noise (comedy engine): base wobble + fog/night/fatigue add-ons, in km.
 NOISE_BASE_KM = 0.02
@@ -48,3 +49,24 @@ TERRAIN_LABELS = (
     "muddy switchbacks",
 )
 OFF_TRAIL_TERRAIN = "thick brush, no trail in sight"
+
+# Special events (comedic, non-book): rolled once per tick, after book-finding (which takes
+# priority — see sim/course.py's detect_special_event and models.EventType). Terrain/grade-gated
+# ones only get an rng roll on qualifying ground; kept deliberately rare at TICK_DT_MIN=0.25 so
+# these read as occasional color, not a running commentary track.
+TRIP_TERRAIN = frozenset(
+    {"steep scree", "muddy switchbacks", "rocky ridge line", OFF_TRAIL_TERRAIN}
+)
+# abs(grade) beyond this also counts as trip-prone
+TRIP_GRADE_PCT_THRESHOLD = 12.0
+TRIP_CHANCE_PER_TICK = 0.02
+
+PUDDLE_TERRAIN = frozenset({"creek crossing", "muddy switchbacks"})
+PUDDLE_CHANCE_PER_TICK = 0.03
+
+BRIAR_TERRAIN = frozenset({"thick briars"})
+BRIAR_CHANCE_PER_TICK = 0.04
+
+WILDLIFE_CHANCE_PER_TICK = 0.006  # night only, any terrain
+
+BOTTLE_DROP_CHANCE_PER_TICK = 0.002  # ungated — any terrain, any time

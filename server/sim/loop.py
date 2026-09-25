@@ -211,6 +211,17 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
         state.rng,
     )
 
+    terrain = course_mod.terrain_at(the_course, state.true_pos)
+    # Special events (trip/puddle/etc.) never override a book find — book-found is checked
+    # first and, per ADR-0015, geometrically can't double-fire with itself in one tick, but a
+    # special event rolled independently could still land on the same tick as a book find, so
+    # this ordering (not just "first non-None wins") is what actually enforces single-event.
+    special_event = None
+    if not has_found_new_book:
+        special_event = course_mod.detect_special_event(
+            terrain, grade_pct, state.park.is_daylight, state.rng
+        )
+
     return _build_observation(
         the_course,
         state.physio,
@@ -224,6 +235,8 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
         state.last_ate_min_ago,
         pace,
         has_found_new_book,
+        terrain,
+        special_event,
     )
 
 
@@ -370,12 +383,11 @@ def _build_observation(
     last_ate_min_ago: float,
     pace: float,
     has_found_new_book: bool,
+    terrain: str,
+    special_event: str | None,
 ) -> Observation:
     collapsed = physiology.has_collapsed(physio.bonk_push_min)
-    event = None
-    if has_found_new_book:
-        event = "found_book"
-    # do something else for other events IF we add them
+    event = "found_book" if has_found_new_book else special_event
     return Observation(
         elapsed_min=round(physio.elapsed_min),
         clock_time=format_clock_time(start_hour, physio.elapsed_min),
@@ -387,7 +399,7 @@ def _build_observation(
         bearing_deg=decision.bearing_deg,
         gps_guess=believed_pos,
         dist_to_trail_km=course_mod.dist_to_trail_km(course, true_pos),
-        terrain=course_mod.terrain_at(course, true_pos),
+        terrain=terrain,
         weather=park.weather,
         books_found=len(books_collected),
         loop=loop,
