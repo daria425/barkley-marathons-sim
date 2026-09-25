@@ -6,6 +6,11 @@ export interface MonologueEntry {
   text: string;
 }
 
+export interface EventEntry {
+  elapsedMin: number;
+  event: NonNullable<RunnerState["last_event"]>;
+}
+
 interface RaceSliceState {
   elapsedMin: number;
   environment: FrozenHeadStatePark | null;
@@ -13,6 +18,9 @@ interface RaceSliceState {
   // Keyed by persona_name, same as `runners` — separate from RaceState's own wire shape
   // since the backend only ever sends the latest last_decision, not a history of them.
   monologues: Record<string, MonologueEntry[]>;
+  // Same pattern as `monologues`, tracking RunnerState.last_event changes. Not rendered yet —
+  // just made available to consumers (CLAUDE.md's event-emitter phase).
+  events: Record<string, EventEntry[]>;
 }
 
 const initialState: RaceSliceState = {
@@ -20,6 +28,7 @@ const initialState: RaceSliceState = {
   environment: null,
   runners: {},
   monologues: {},
+  events: {},
 };
 
 const raceSlice = createSlice({
@@ -37,6 +46,14 @@ const raceSlice = createSlice({
           (state.monologues[name] ??= []).push({
             elapsedMin: next.elapsed_min,
             text: nextMonologue,
+          });
+        }
+        const prevEvent = state.runners[name]?.last_event;
+        const nextEvent = runner.last_event;
+        if (nextEvent && nextEvent !== prevEvent) {
+          (state.events[name] ??= []).push({
+            elapsedMin: next.elapsed_min,
+            event: nextEvent,
           });
         }
       }

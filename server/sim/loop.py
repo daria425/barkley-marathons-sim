@@ -343,6 +343,7 @@ def _build_runner_state(
         pace_min_per_km=obs.pace_min_per_km,
         feel=obs.feel,
         last_decision=decision,
+        last_event=obs.event,
     )
 
 

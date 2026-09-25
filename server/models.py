@@ -12,6 +12,17 @@ from pydantic import BaseModel
 from sim.frozen_head_state_park import FrozenHeadStatePark
 from sim.physiology import PhysiologyState
 
+# Single event per tick (see ADR-0015/ADR-00XX) — detectors run in a fixed priority order and
+# the first hit wins. Add new values here as other trigger events land.
+EventType = Literal[
+    "found_book",
+    "tripped_and_fell",
+    "stepped_in_puddle",
+    "briar_scratch",
+    "spooked_by_wildlife",
+    "dropped_water_bottle",
+]
+
 
 class Observation(BaseModel):
     elapsed_min: int
@@ -27,8 +38,7 @@ class Observation(BaseModel):
     dist_to_trail_km: float  # raw distance to nearest trail point — continuous, not clamped
     # to the on/off-trail threshold, so it reads as a trend across turns rather than a flip
     terrain: str  # "thick briars", "creek crossing"
-    # only "found_book" exists so far; add more values here as other trigger events land
-    event: Literal["found_book"] | None
+    event: EventType | None
     weather: str
     books_found: int
     loop: int
@@ -61,6 +71,9 @@ class RunnerState(BaseModel):
     pace_min_per_km: float
     feel: str
     last_decision: Decision | None = None
+    # most recent Observation.event, mirrored onto the wire for frontend consumption — not
+    # rendered yet, just made available (no UI hookup in this phase)
+    last_event: EventType | None = None
 
 
 class Checkpoint(BaseModel):
