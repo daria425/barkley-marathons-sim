@@ -35,13 +35,18 @@ function formatClock(elapsedMin: number): string {
 
 function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   const label =
-    status === "open" ? "Live" : status === "connecting" ? "Connecting…" : "Disconnected";
+    status === "open"
+      ? "Live"
+      : status === "connecting"
+        ? "Connecting…"
+        : "Disconnected";
   return (
     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
       <span
         className={cn(
           "size-1.5 rounded-full",
-          status === "open" && "bg-primary shadow-[0_0_0_3px_rgba(0,174,199,0.25)]",
+          status === "open" &&
+            "bg-primary shadow-[0_0_0_3px_rgba(0,174,199,0.25)]",
           status === "connecting" && "animate-pulse bg-secondary-foreground/60",
           status === "closed" && "bg-destructive",
         )}
@@ -61,9 +66,12 @@ export function Controls({ status }: { status: ConnectionStatus }) {
   async function handleStart() {
     setStarting(true);
     try {
-      await fetch(`${API_BASE_URL}/run?speed=${RUN_SPEED}&duration_min=${RUN_DURATION_MIN}`, {
-        method: "POST",
-      });
+      await fetch(
+        `${API_BASE_URL}/run?speed=${RUN_SPEED}&duration_min=${RUN_DURATION_MIN}`,
+        {
+          method: "POST",
+        },
+      );
     } finally {
       setStarting(false);
     }
@@ -73,7 +81,7 @@ export function Controls({ status }: { status: ConnectionStatus }) {
     <Panel className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 px-5 py-3">
       <div className="flex items-center gap-4">
         <span className="text-sm font-bold tracking-[0.08em] text-foreground uppercase">
-          Barkley <span className="text-primary">Sim</span>
+          Barkley Marathons <span className="text-primary">Simulator</span>
         </span>
         <div className="flex items-center gap-4 font-mono text-sm text-muted-foreground tabular-nums">
           <span className="text-foreground">{formatClock(elapsedMin)}</span>
@@ -81,7 +89,9 @@ export function Controls({ status }: { status: ConnectionStatus }) {
             <span className="hidden sm:inline">
               {environment.weather} · {environment.temperature_c.toFixed(0)}°C
               {environment.is_daylight ? "" : " · night"}
-              {environment.fog_pct > 15 && environment.weather !== "fog" ? " · fog" : ""}
+              {environment.fog_pct > 15 && environment.weather !== "fog"
+                ? " · fog"
+                : ""}
             </span>
           )}
         </div>
