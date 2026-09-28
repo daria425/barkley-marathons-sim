@@ -31,6 +31,15 @@ OnUpdate = Callable[[RaceState], Awaitable[None]]
 # wall-clock time between ticks is TICK_DT_MIN * 60s (at speed=1).
 TICK_DT_MIN = 0.25
 
+# Fault-tolerance constants (see docs/adr for the phase that introduced these). Checkpoints
+# normally only happen on a successful brain decision (ADR-0008) — this bounds how much
+# sim-time a crash during an extended brain-call outage could lose.
+FALLBACK_CHECKPOINT_INTERVAL_MIN = 5.0
+# How often (in ticks) run() prunes already-finished think() tasks out of its bookkeeping
+# list — without this, a full 60h race holds ~14,400 Task objects in memory until the final
+# gather, none of which need to be kept once done (think() swallows its own exceptions).
+TASK_PRUNE_INTERVAL_TICKS = 100
+
 # Race length in sim-minutes. Real target per CLAUDE.md ("60-hour cutoff"). run()'s
 # duration_min param defaults to this — pass a smaller value (e.g. via
 # scripts/smoke_test.py --duration-min) for a short smoke test or a bounded live canary
@@ -73,6 +82,10 @@ class RunnerLoop:
         # High-water mark for batched compaction (memory.py's compact_if_needed) — how many of
         # this runner's turns are already folded into `summary`.
         self.summary_folded_count = 0
+        # elapsed_min as of the last checkpoint write, from either a successful brain decision
+        # (_compact_and_checkpoint) or run()'s time-based fallback — whichever happens second
+        # resets the fallback timer, so the two never redundantly checkpoint back to back.
+        self.last_checkpoint_elapsed_min = 0.0
 
 
 @dataclass(frozen=True)
@@ -248,6 +261,34 @@ def _estimate_cadence(effort_rpe: int) -> int:
     return 150 + effort_rpe * 3
 
 
+def _build_checkpoint(
+    runner: RunnerLoop, snapshot: StateSnapshot, decision: Decision
+) -> Checkpoint:
+    """Pure construction of a Checkpoint from a runner's current summary state + a tick's
+    StateSnapshot. Split out of _compact_and_checkpoint so a checkpoint can be built and saved
+    without a fresh brain decision — the crash-boundary and time-based fallback checkpoint in
+    run() both need exactly this, with no compaction step."""
+    return Checkpoint(
+        runner_id=runner.runner_id,
+        elapsed_min=snapshot.physio.elapsed_min,
+        physiology=snapshot.physio,
+        environment=snapshot.park,
+        start_hour=snapshot.start_hour,
+        true_pos=snapshot.true_pos,
+        believed_pos=snapshot.believed_pos,
+        loop=snapshot.loop,
+        books_found=len(snapshot.books_collected),
+        books_collected_this_loop=sorted(snapshot.books_collected),
+        dist_since_loop_start_km=snapshot.dist_since_loop_start_km,
+        last_ate_min_ago=snapshot.last_ate_min_ago,
+        last_decision=decision,
+        rng_state=snapshot.rng_state,
+        summary_text=runner.summary,
+        summary_covers_up_to_elapsed_min=runner.summary_covers_up_to_elapsed_min,
+        summary_folded_count=runner.summary_folded_count,
+    )
+
+
 async def _compact_and_checkpoint(
     runner: RunnerLoop, obs: Observation, decision: Decision, snapshot: StateSnapshot
 ) -> None:
@@ -269,26 +310,8 @@ async def _compact_and_checkpoint(
     runner.summary = new_summary
     runner.summary_folded_count = new_folded_count
 
-    checkpoint = Checkpoint(
-        runner_id=runner.runner_id,
-        elapsed_min=snapshot.physio.elapsed_min,
-        physiology=snapshot.physio,
-        environment=snapshot.park,
-        start_hour=snapshot.start_hour,
-        true_pos=snapshot.true_pos,
-        believed_pos=snapshot.believed_pos,
-        loop=snapshot.loop,
-        books_found=len(snapshot.books_collected),
-        books_collected_this_loop=sorted(snapshot.books_collected),
-        dist_since_loop_start_km=snapshot.dist_since_loop_start_km,
-        last_ate_min_ago=snapshot.last_ate_min_ago,
-        last_decision=decision,
-        rng_state=snapshot.rng_state,
-        summary_text=runner.summary,
-        summary_covers_up_to_elapsed_min=runner.summary_covers_up_to_elapsed_min,
-        summary_folded_count=runner.summary_folded_count,
-    )
-    await db.save_checkpoint(runner.conn, checkpoint)
+    await db.save_checkpoint(runner.conn, _build_checkpoint(runner, snapshot, decision))
+    runner.last_checkpoint_elapsed_min = snapshot.physio.elapsed_min
 
 
 async def think(
@@ -440,6 +463,7 @@ async def run(
         runner.summary = checkpoint.summary_text
         runner.summary_covers_up_to_elapsed_min = checkpoint.summary_covers_up_to_elapsed_min
         runner.summary_folded_count = checkpoint.summary_folded_count
+        runner.last_checkpoint_elapsed_min = checkpoint.elapsed_min
         print(
             f"Resuming {runner.runner_id} from checkpoint at elapsed_min="
             f"{checkpoint.elapsed_min:.1f} (summary: {len(checkpoint.summary_text)} chars)"
@@ -453,33 +477,63 @@ async def run(
 
     tasks: list[asyncio.Task] = []
     n_ticks = int(duration_min / TICK_DT_MIN)
-    for _ in range(n_ticks):
-        decision = runner.decision
-        obs = advance_tick(state, decision, TICK_DT_MIN)
-        # rng_state captured here, same tick as physio/park, so a checkpoint built from this
-        # snapshot represents one consistent instant — not whatever rng looks like by the time
-        # the async think() task using it actually runs.
-        snapshot = StateSnapshot(
-            physio=state.physio,
-            park=state.park,
-            start_hour=state.start_hour,
-            true_pos=state.true_pos,
-            believed_pos=state.believed_pos,
-            loop=state.loop,
-            books_collected=state.books_collected,
-            dist_since_loop_start_km=state.dist_since_loop_start_km,
-            last_ate_min_ago=state.last_ate_min_ago,
-            rng_state=db.serialize_rng_state(state.rng),
-        )
-        print(f"[{obs.clock_time}] HR={obs.hr} pace={obs.pace_min_per_km:.1f} feel={obs.feel}")
-        if on_update is not None:
-            runner_state = _build_runner_state(runner, obs, snapshot, decision)
-            await on_update(_build_race_state(runner_state, snapshot))
-        tasks.append(asyncio.create_task(think(runner, obs, snapshot, on_update)))
-        await asyncio.sleep(TICK_DT_MIN * 60 / speed)
-
-    await asyncio.gather(*tasks)
-    await conn.close()
+    # Set from inside the loop after each tick fully succeeds — if a tick raises partway
+    # through, this still holds the last known-good snapshot to checkpoint from, rather than
+    # whatever partially-mutated state the failing tick left behind.
+    last_good_snapshot: StateSnapshot | None = None
+    try:
+        for _ in range(n_ticks):
+            decision = runner.decision
+            obs = advance_tick(state, decision, TICK_DT_MIN)
+            # rng_state captured here, same tick as physio/park, so a checkpoint built from
+            # this snapshot represents one consistent instant — not whatever rng looks like by
+            # the time the async think() task using it actually runs.
+            snapshot = StateSnapshot(
+                physio=state.physio,
+                park=state.park,
+                start_hour=state.start_hour,
+                true_pos=state.true_pos,
+                believed_pos=state.believed_pos,
+                loop=state.loop,
+                books_collected=state.books_collected,
+                dist_since_loop_start_km=state.dist_since_loop_start_km,
+                last_ate_min_ago=state.last_ate_min_ago,
+                rng_state=db.serialize_rng_state(state.rng),
+            )
+            last_good_snapshot = snapshot
+            print(f"[{obs.clock_time}] HR={obs.hr} pace={obs.pace_min_per_km:.1f} feel={obs.feel}")
+            if on_update is not None:
+                runner_state = _build_runner_state(runner, obs, snapshot, decision)
+                await on_update(_build_race_state(runner_state, snapshot))
+            # Fallback checkpoint: normally checkpoints only happen on a successful brain
+            # decision (_compact_and_checkpoint), which can go quiet for a long stretch during
+            # a brain-call outage. This bounds how much sim-time such an outage can cost.
+            if (
+                snapshot.physio.elapsed_min - runner.last_checkpoint_elapsed_min
+                >= FALLBACK_CHECKPOINT_INTERVAL_MIN
+            ):
+                await db.save_checkpoint(conn, _build_checkpoint(runner, snapshot, decision))
+                runner.last_checkpoint_elapsed_min = snapshot.physio.elapsed_min
+            tasks.append(asyncio.create_task(think(runner, obs, snapshot, on_update)))
+            if len(tasks) % TASK_PRUNE_INTERVAL_TICKS == 0:
+                tasks = [t for t in tasks if not t.done()]
+            await asyncio.sleep(TICK_DT_MIN * 60 / speed)
+    except Exception as e:
+        print(f"Tick loop crashed ({type(e).__name__}: {e}) — attempting best-effort checkpoint")
+        if last_good_snapshot is not None:
+            try:
+                checkpoint = _build_checkpoint(runner, last_good_snapshot, runner.decision)
+                await db.save_checkpoint(conn, checkpoint)
+                print("Best-effort checkpoint saved before re-raising")
+            except Exception as checkpoint_error:
+                print(f"Best-effort checkpoint also failed: {checkpoint_error}")
+        raise
+    finally:
+        # return_exceptions=True: think() already swallows its own exceptions (CLAUDE.md's
+        # "no retries, keep the old decision" contract), so nothing here should ever raise —
+        # but a crashed tick loop shouldn't let a stray task exception mask the real error.
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await conn.close()
 
 
 if __name__ == "__main__":

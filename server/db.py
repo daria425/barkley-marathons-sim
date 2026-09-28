@@ -44,6 +44,11 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 
 async def init_db(path: str) -> aiosqlite.Connection:
     conn = await aiosqlite.connect(path)
+    # WAL + busy_timeout: the sim holds this connection open for up to 60h straight, and a
+    # future concurrent reader (an admin script, a status check) shouldn't be able to hit
+    # "database is locked" against a writer that's still running.
+    await conn.execute("PRAGMA journal_mode=WAL")
+    await conn.execute("PRAGMA busy_timeout=5000")
     await conn.execute(CREATE_TABLE_SQL)
     await conn.execute(CREATE_CHECKPOINTS_TABLE_SQL)
     await conn.commit()

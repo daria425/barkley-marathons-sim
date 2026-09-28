@@ -8,6 +8,7 @@ docstring for why (agents/participant.py builds its AsyncAnthropic client at imp
 
 import asyncio
 import os
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +21,21 @@ setup_observability()
 from models import CourseBook, CourseGeometry, RaceState  # noqa: E402
 from sim import course as course_mod  # noqa: E402
 from sim.loop import FULL_RACE_MINUTES, run  # noqa: E402
+
+# How many consecutive run() crashes with zero sim-time progress the supervisor tolerates
+# before giving up — a transient hiccup (DB lock, a one-off bad state) gets retried, a
+# persistent bug (crashes before a single tick completes) doesn't spin forever.
+MAX_CONSECUTIVE_FAILURES = 5
+RESTART_BACKOFF_SEC = 5
+
+# Populated by _broadcast (every tick) and _supervised_run (on crash/restart) — backs /status.
+_health: dict = {
+    "alive": False,
+    "last_tick_elapsed_min": None,
+    "last_tick_at": None,
+    "restart_count": 0,
+    "last_error": None,
+}
 
 app = FastAPI()
 
@@ -39,7 +55,10 @@ _run_task: asyncio.Task | None = None
 async def _broadcast(race_state: RaceState) -> None:
     """Fans a RaceState out to every connected WS client — a dead client just gets dropped
     from the set, not treated as fatal to the sim loop (same spirit as think()'s own
-    swallow-and-log-don't-crash contract)."""
+    swallow-and-log-don't-crash contract). Also the one place every tick already passes
+    through, so it doubles as the liveness signal /status reports."""
+    _health["last_tick_elapsed_min"] = race_state.elapsed_min
+    _health["last_tick_at"] = datetime.now(UTC).isoformat()
     if not _ws_clients:
         return
     payload = race_state.model_dump_json()
@@ -48,6 +67,45 @@ async def _broadcast(race_state: RaceState) -> None:
             await ws.send_text(payload)
         except Exception:
             _ws_clients.discard(ws)
+
+
+async def _supervised_run(speed: float, duration_min: float) -> None:
+    """Wraps sim.loop.run() with crash-restart. run()'s own crash boundary (sim/loop.py)
+    checkpoints best-effort before re-raising, and db.load_checkpoint (ADR-0008) means a fresh
+    run() call resumes right where the last one left off — so on a crash, this just calls
+    run() again rather than losing the race. Keeps calling until `duration_min` of sim-time
+    has actually elapsed (tracked via _health, updated every tick by _broadcast) or too many
+    crashes happen in a row with zero progress."""
+    remaining = duration_min
+    consecutive_failures = 0
+    _health["alive"] = True
+    try:
+        while remaining > 0:
+            start_elapsed = _health["last_tick_elapsed_min"] or 0.0
+            try:
+                await run(speed=speed, duration_min=remaining, on_update=_broadcast)
+                return
+            except Exception as e:
+                last_elapsed = _health["last_tick_elapsed_min"] or start_elapsed
+                progressed = last_elapsed - start_elapsed
+                remaining -= progressed
+                consecutive_failures = 0 if progressed > 0 else consecutive_failures + 1
+                _health["restart_count"] += 1
+                _health["last_error"] = f"{type(e).__name__}: {e}"
+                print(
+                    f"[supervisor] run() crashed ({_health['last_error']}); "
+                    f"{remaining:.1f} sim-min remaining, {consecutive_failures} consecutive "
+                    "failure(s) with no progress"
+                )
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    print(
+                        f"[supervisor] giving up after {MAX_CONSECUTIVE_FAILURES} consecutive "
+                        "failures with no progress — last checkpoint is intact for inspection"
+                    )
+                    return
+                await asyncio.sleep(RESTART_BACKOFF_SEC)
+    finally:
+        _health["alive"] = False
 
 
 @app.get("/")
@@ -64,10 +122,18 @@ async def run_ultra_sim(speed: float = 1.0, duration_min: float = FULL_RACE_MINU
     global _run_task
     if _run_task is not None and not _run_task.done():
         return {"status": "already running"}
-    _run_task = asyncio.create_task(
-        run(speed=speed, duration_min=duration_min, on_update=_broadcast)
-    )
+    _run_task = asyncio.create_task(_supervised_run(speed=speed, duration_min=duration_min))
     return {"status": "started", "speed": speed, "duration_min": duration_min}
+
+
+@app.get("/status")
+async def status():
+    """Liveness for an unattended multi-hour run — is the sim task alive, when did it last
+    tick, and has the crash-restart supervisor (_supervised_run) had to kick in."""
+    return {
+        "running": _run_task is not None and not _run_task.done(),
+        **_health,
+    }
 
 
 @app.get("/course", response_model=CourseGeometry)
