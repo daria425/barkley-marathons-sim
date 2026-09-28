@@ -8,9 +8,10 @@ docstring for why (agents/participant.py builds its AsyncAnthropic client at imp
 
 import asyncio
 import os
+import secrets
 from datetime import UTC, datetime
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from observability import setup_observability
@@ -27,6 +28,22 @@ from sim.loop import FULL_RACE_MINUTES, run  # noqa: E402
 # persistent bug (crashes before a single tick completes) doesn't spin forever.
 MAX_CONSECUTIVE_FAILURES = 5
 RESTART_BACKOFF_SEC = 5
+
+# The one costly, state-changing endpoint (POST /run kicks off a 60h race, real Anthropic
+# spend) is gated behind a single shared secret, not real auth — there's one operator (you),
+# not users/sessions. Same ".env, gitignored, mirrored as a Fly.io secret" convention as
+# ANTHROPIC_API_KEY (CLAUDE.md's Conventions). No token set means fail CLOSED (nobody can
+# start a run), not open.
+RACE_ADMIN_TOKEN = os.environ.get("RACE_ADMIN_TOKEN", "")
+
+
+def require_admin_token(x_admin_token: str = Header(default="")) -> None:
+    """FastAPI dependency guarding POST /run. secrets.compare_digest avoids a timing
+    side-channel on the comparison; a plain `==` leaks how many leading characters matched
+    through response latency."""
+    if not RACE_ADMIN_TOKEN or not secrets.compare_digest(x_admin_token, RACE_ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="invalid or missing admin token")
+
 
 # Populated by _broadcast (every tick) and _supervised_run (on crash/restart) — backs /status.
 _health: dict = {
@@ -113,12 +130,14 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.post("/run")
+@app.post("/run", dependencies=[Depends(require_admin_token)])
 async def run_ultra_sim(speed: float = 1.0, duration_min: float = FULL_RACE_MINUTES):
     """Kicks off the sim loop as a background task and returns immediately — the sim never
     waits for callers any more than it waits for the LLM. Only one run at a time in v1
     (single-runner, no race-end concept yet, per CLAUDE.md). duration_min defaults to the full
-    60h race; pass a smaller value for a bounded live canary."""
+    60h race; pass a smaller value for a bounded live canary. Requires the X-Admin-Token
+    header (see require_admin_token) — this is the one endpoint that costs real money and
+    starts a race other people can watch, so it isn't left open to anyone who finds the URL."""
     global _run_task
     if _run_task is not None and not _run_task.done():
         return {"status": "already running"}

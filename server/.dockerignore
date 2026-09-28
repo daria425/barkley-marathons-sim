@@ -1,0 +1,12 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.hypothesis
+.ruff_cache
+.env
+.env.*
+!.env.example
+smoke_test.db
+smoke_test.db-*
+tests

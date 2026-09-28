@@ -4,6 +4,7 @@ everything else (physiology, weather, memory, logging) already was.
 """
 
 import asyncio
+import os
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -45,7 +46,8 @@ TASK_PRUNE_INTERVAL_TICKS = 100
 # scripts/smoke_test.py --duration-min) for a short smoke test or a bounded live canary
 # instead of editing this constant.
 FULL_RACE_MINUTES = 60 * 60
-DB_PATH = "smoke_test.db"
+SIM_DB_PATH_ENV_VAR = "SIM_DB_PATH"  # points at a Fly volume mount in prod; local dev omits it
+DB_PATH = os.environ.get(SIM_DB_PATH_ENV_VAR, "smoke_test.db")
 PERSONA_PATH = Path(__file__).parent.parent / "agents" / "personas" / "barkley_expert.yaml"
 
 BASE_HR = 60

@@ -26,3 +26,15 @@ Instead of asking a model to simply predict whether a runner finishes, the simul
 The simulator
 models the runner's body (heart rate, glycogen, hydration, core temp, sleep debt) and the harsh world (weather, fog, terrain, day/night cycle),
 feeding observations to the LLM as the "brain" making decisions every few minutes (effort level, eating, drinking, bearing, resting, quitting).
+
+## Key features
+
+- **Physiology sim** — heart rate, glycogen, hydration, and core temp evolve from effort, grade, heat, and cardiac drift over elapsed time. Run glycogen to zero and pace collapses into a bonk; the runner has to eat/drink/rest its way back out.
+- **True vs. believed position** — the runner never sees its real GPS location, only a noisy estimate that gets worse with fog, night, and fatigue. The frontend draws both dots and the gap between them — most of the comedy comes from the LLM trusting a compass reading that's quietly lying to it.
+- **Sleep-debt hallucinations** — past ~40 hours in, the runner starts seeing things (a bear that waves back, a mirage finish line, trail markers spelling out its bib number) that get injected straight into its own observations as if real.
+- **Decaying memory** — older race history isn't just summarized, it's *degraded*: as sleep debt rises, the compacted memory of earlier loops gets jumbled and less reliable, while recent turns stay sharp — the runner's own sense of "what happened earlier" erodes exactly like a real sleep-deprived brain's would.
+- **Random misadventures** — trips and falls on rough grade, briar scratches, puddle steps, spooked-by-wildlife-at-night, dropped water bottles — one-off comedic events layered on top of the physiology, terrain, and time-of-day that make them likely.
+- **Hidden books, real Barkley rules** — 13 books hidden per loop, must be found and "torn" (bib page noted) to prove passage; loops only count once a real fraction of the course has actually been covered, not just wandered near the start/finish.
+- **Crash-safe, checkpointed runs** — every decision is checkpointed (including RNG state, for bit-exact resume) so the sim can survive a crash or restart mid-race without losing the runner's progress or memory; a supervisor auto-restarts a failed run from its last checkpoint rather than losing the whole 60 hours.
+- **Live-streamed, not replayed** — a WebSocket broadcasts every tick and every brain decision as it happens, so the map, watch face, and monologue feed update in real time while the race is actually running.
+- **Full observability** — every Anthropic call is traced end-to-end in Langfuse, and every Observation/Decision pair (plus any failed brain calls and why) is logged to SQLite for later digging.
