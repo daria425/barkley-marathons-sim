@@ -12,7 +12,8 @@ function IdleState() {
     <Panel className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
       <h2 className="text-sm font-semibold tracking-wide">No runner yet</h2>
       <p className="max-w-[22ch] text-sm text-muted-foreground">
-        Waiting for a race to start on the backend.
+        Race hasn't started yet! Waiting for Gary Cantrell to light his
+        cigarette...
       </p>
     </Panel>
   );
