@@ -71,6 +71,10 @@ app.add_middleware(
 
 _ws_clients: set[WebSocket] = set()
 _run_task: asyncio.Task | None = None
+# Last RaceState broadcast, replayed to a client the instant it connects — otherwise a
+# newly-opened tab sees an empty store (frontend renders IdleState) until the next tick's
+# broadcast fires, which at speed=1 can be up to 15s away.
+_latest_race_state: RaceState | None = None
 
 
 async def _broadcast(race_state: RaceState) -> None:
@@ -78,6 +82,8 @@ async def _broadcast(race_state: RaceState) -> None:
     from the set, not treated as fatal to the sim loop (same spirit as think()'s own
     swallow-and-log-don't-crash contract). Also the one place every tick already passes
     through, so it doubles as the liveness signal /status reports."""
+    global _latest_race_state
+    _latest_race_state = race_state
     _health["last_tick_elapsed_min"] = race_state.elapsed_min
     _health["last_tick_at"] = datetime.now(UTC).isoformat()
     if not _ws_clients:
@@ -195,6 +201,12 @@ async def schema_export(model: str):
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     _ws_clients.add(websocket)
+    if _latest_race_state is not None:
+        try:
+            await websocket.send_text(_latest_race_state.model_dump_json())
+        except Exception:
+            _ws_clients.discard(websocket)
+            return
     try:
         while True:
             # Nothing incoming to act on yet — just keep the connection open until the

@@ -191,7 +191,8 @@ def format_observation(obs: Observation) -> str:
         "Your body and surroundings, right now:",
         f"{obs.clock_time} ({obs.elapsed_min} min elapsed), loop {obs.loop}, "
         f"{obs.books_found} books found.",
-        f"HR {obs.hr}, pace {obs.pace_min_per_km:.1f} min/km, cadence {obs.cadence}.",
+        f"HR {obs.hr}, pace {obs.pace_min_per_km:.1f} min/km, cadence {obs.cadence}."
+        + (" You are stopped, not covering ground." if obs.pace_min_per_km == 0.0 else ""),
         f"You feel: {obs.feel}. Last ate {obs.last_ate_min_ago} min ago.",
         f"Bearing {obs.bearing_deg:.0f} degrees. Believed position: {obs.gps_guess}.",
         f"Distance to trail: {obs.dist_to_trail_km:.2f}km.",

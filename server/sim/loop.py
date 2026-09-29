@@ -209,9 +209,15 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
     # A tick under a rest_min>0 decision covers no ground — otherwise "rest" was free (HR/
     # glycogen/position all advanced exactly as if still moving), so the sim had no way to make
     # resting cost anything, and no way for a repeated rest decision to ever change what the
-    # next Observation looks like. `pace` above still reflects effort, unchanged — it's what
-    # you'd be running at if you weren't resting, not what ground you actually covered.
-    distance_km = 0.0 if decision.rest_min > 0 else dt_min / pace
+    # next Observation looks like.
+    resting = decision.rest_min > 0
+    distance_km = 0.0 if resting else dt_min / pace
+    # Report ground-truth pace, not the hypothetical effort-based pace computed above — a real
+    # GPS watch reads 0:00 pace when stationary, not whatever pace you'd be running at if you
+    # weren't stopped. Reporting the hypothetical pace during a rest tick was misleading the
+    # LLM into thinking "rest" hadn't actually changed anything.
+    if resting:
+        pace = 0.0
     state.true_pos = course_mod.advance_position(state.true_pos, decision.bearing_deg, distance_km)
     state.dist_since_loop_start_km += distance_km
     if course_mod.loop_completed(the_course, state.true_pos, state.dist_since_loop_start_km):
