@@ -166,20 +166,31 @@ def render_segment(facts: SegmentFacts) -> str:
 
     return (
         f"From {facts.start_clock} to {facts.end_clock} (loop {facts.loop}): "
-        f"{books_phrase}, {feel_phrase}, {food_phrase}.{quit_phrase}{events_phrase} "
-        f'"{facts.highlight_monologue}"'
+        f"{books_phrase}, {feel_phrase}, {food_phrase}.{quit_phrase}{events_phrase}"
     )
 
 
-def compact_segment(turns: list[tuple[Observation, Decision]]) -> str:
+def render_highlight(facts: SegmentFacts) -> str:
+    """The segment's quoted monologue, rendered separately from render_segment (ADR-0018) so a
+    fold can replace the standing "latest highlight" instead of appending another quote onto an
+    ever-growing summary — see compact_if_needed's docstring."""
+    return f'"{facts.highlight_monologue}"'
+
+
+def compact_segment(turns: list[tuple[Observation, Decision]]) -> tuple[str, str]:
     """ADR-0017: the segment is jumbled once, at fold time, based on severity at the segment's
     own end — not re-jumbled on every subsequent compaction — so a summary reads accurately for
     the early race and only degrades toward however far sleep debt had climbed when each chunk
     was folded. jumble_text is a pure function of (text, severity), so this stays deterministic
-    and resume-safe (ADR-0008/0009)."""
-    text = render_segment(extract_segment_facts(turns))
-    end_elapsed_min = turns[-1][0].elapsed_min
-    return hallucinations.jumble_text(text, hallucinations.jumble_severity_for(end_elapsed_min))
+    and resume-safe (ADR-0008/0009).
+
+    Returns (segment_text, highlight_text) — ADR-0018 folds these into the summary body and the
+    standing "latest highlight" separately; both get jumbled independently at the same severity."""
+    facts = extract_segment_facts(turns)
+    severity = hallucinations.jumble_severity_for(turns[-1][0].elapsed_min)
+    segment_text = hallucinations.jumble_text(render_segment(facts), severity)
+    highlight_text = hallucinations.jumble_text(render_highlight(facts), severity)
+    return segment_text, highlight_text
 
 
 def format_observation(obs: Observation) -> str:
@@ -219,35 +230,45 @@ def turns_to_messages(turns: list[tuple[Observation, Decision]]) -> list[dict]:
 
 
 def compact_if_needed(
-    summary: str,
+    summary_body: str,
+    latest_highlight: str,
     all_turns: list[tuple[Observation, Decision]],
     folded_count: int,
     n: int = SLIDING_WINDOW_N,
     batch_size: int = COMPACT_BATCH_SIZE,
-) -> tuple[str, list[tuple[Observation, Decision]], int]:
-    """ADR-0008's compaction trigger, batched (see COMPACT_BATCH_SIZE's docstring on why).
-    `all_turns` is the FULL history for this runner, oldest-first (db.get_all_turns, not
-    db.get_recent_turns). `folded_count` is how many of the oldest turns are already folded
-    into `summary` — the caller's high-water mark, since this function only ever sees a
-    snapshot and can't infer it from `summary` text.
+) -> tuple[str, str, list[tuple[Observation, Decision]], int]:
+    """ADR-0008's compaction trigger, batched (see COMPACT_BATCH_SIZE's docstring on why) and
+    monologue-split (ADR-0018, see render_highlight's docstring on why). `all_turns` is the FULL
+    history for this runner, oldest-first (db.get_all_turns, not db.get_recent_turns).
+    `folded_count` is how many of the oldest turns are already folded into `summary_body` — the
+    caller's high-water mark, since this function only ever sees a snapshot and can't infer it
+    from `summary_body` text.
 
-    Returns (new_summary, remaining_window, new_folded_count). remaining_window is always
-    exactly the last `n` turns, to keep replaying verbatim. Turns between `folded_count` and
-    `len(all_turns) - n` are "pending": aged out of the verbatim window but not yet folded,
-    because fewer than `batch_size` of them have piled up — nothing happens to them until
-    enough accumulate, at which point they're folded into ONE segment together (not one
-    segment per turn, which is what made the unbatched version grow by a full line every tick).
+    `summary_body` is the ever-growing, monologue-free facts log — one line per folded segment.
+    `latest_highlight` is the single most recent segment's quoted monologue: REPLACED, not
+    appended, on every fold, so it never accumulates (ADR-0018) — every prior monologue that
+    was ever "the latest" gets dropped for good once a newer one takes its place. Callers that
+    want continuity keep concatenating `summary_body` + `latest_highlight` at prompt-build time
+    (see agents/participant.py), not storing them pre-joined.
+
+    Returns (new_summary_body, new_latest_highlight, remaining_window, new_folded_count).
+    remaining_window is always exactly the last `n` turns, to keep replaying verbatim. Turns
+    between `folded_count` and `len(all_turns) - n` are "pending": aged out of the verbatim
+    window but not yet folded, because fewer than `batch_size` of them have piled up — nothing
+    happens to them until enough accumulate, at which point they're folded into ONE segment
+    together (not one segment per turn, which is what made the unbatched version grow by a full
+    line every tick).
 
     Pure and deterministic given the same inputs — unlike the originally-planned LLM call, this
     is unit-testable without hitting the Anthropic API (ADR-0008)."""
     if len(all_turns) <= n:
-        return summary, list(all_turns), folded_count
+        return summary_body, latest_highlight, list(all_turns), folded_count
     fold_upto = len(all_turns) - n
     remaining = all_turns[fold_upto:]
     pending = fold_upto - folded_count
     if pending < batch_size:
-        return summary, remaining, folded_count
+        return summary_body, latest_highlight, remaining, folded_count
     aged_out = all_turns[folded_count:fold_upto]
-    segment_text = compact_segment(aged_out)
-    new_summary = f"{summary}\n{segment_text}" if summary else segment_text
-    return new_summary, remaining, fold_upto
+    segment_text, highlight_text = compact_segment(aged_out)
+    new_summary_body = f"{summary_body}\n{segment_text}" if summary_body else segment_text
+    return new_summary_body, highlight_text, remaining, fold_upto

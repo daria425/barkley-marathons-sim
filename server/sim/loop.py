@@ -80,9 +80,12 @@ class RunnerLoop:
         self.conn = conn
         self.sem = sem
         self.decision = STARTING_DECISION
-        # ADR-0008: running compacted summary + how far it reaches. Defaults are the
-        # fresh-start case; run() overwrites all three from the checkpoint when resuming.
-        self.summary = ""
+        # ADR-0008/0018: running compacted summary + how far it reaches. summary_body is the
+        # monologue-free facts log (ever-growing); latest_highlight is just the most recently
+        # folded segment's quoted monologue, replaced (not appended) on every fold. Defaults
+        # are the fresh-start case; run() overwrites all four from the checkpoint when resuming.
+        self.summary_body = ""
+        self.latest_highlight = ""
         self.summary_covers_up_to_elapsed_min = 0
         # High-water mark for batched compaction (memory.py's compact_if_needed) — how many of
         # this runner's turns are already folded into `summary`.
@@ -294,7 +297,8 @@ def _build_checkpoint(
         last_ate_min_ago=snapshot.last_ate_min_ago,
         last_decision=decision,
         rng_state=snapshot.rng_state,
-        summary_text=runner.summary,
+        summary_body=runner.summary_body,
+        latest_highlight=runner.latest_highlight,
         summary_covers_up_to_elapsed_min=runner.summary_covers_up_to_elapsed_min,
         summary_folded_count=runner.summary_folded_count,
     )
@@ -307,20 +311,26 @@ async def _compact_and_checkpoint(
     summary and write a checkpoint. Failures here are swallowed by think()'s own try/except —
     losing a checkpoint write shouldn't crash the tick loop any more than a DB hiccup should."""
     all_turns = await db.get_all_turns(runner.conn, runner.runner_id)
-    new_summary, remaining, new_folded_count = compact_if_needed(
-        runner.summary,
+    new_summary_body, new_highlight, remaining, new_folded_count = compact_if_needed(
+        runner.summary_body,
+        runner.latest_highlight,
         all_turns,
         runner.summary_folded_count,
         n=SLIDING_WINDOW_N,
         batch_size=COMPACT_BATCH_SIZE,
     )
-    if new_summary != runner.summary:
+    if new_folded_count != runner.summary_folded_count:
         newly_folded_elapsed = all_turns[new_folded_count - 1][0].elapsed_min
         runner.summary_covers_up_to_elapsed_min = round(newly_folded_elapsed)
         logger.info(
-            "[%s] ...%s's memory compacts: %r", obs.clock_time, runner.runner_id, new_summary
+            "[%s] ...%s's memory compacts: %r (latest: %r)",
+            obs.clock_time,
+            runner.runner_id,
+            new_summary_body,
+            new_highlight,
         )
-    runner.summary = new_summary
+    runner.summary_body = new_summary_body
+    runner.latest_highlight = new_highlight
     runner.summary_folded_count = new_folded_count
 
     await db.save_checkpoint(runner.conn, _build_checkpoint(runner, snapshot, decision))
@@ -346,7 +356,9 @@ async def think(
         history = await db.get_recent_turns(runner.conn, runner.runner_id, SLIDING_WINDOW_N)
         with propagate_attributes(session_id=runner.runner_id, tags=["barkley-smoke-test"]):
             async with runner.sem:
-                outcome = await runner.participant.decide(obs, history, runner.summary)
+                outcome = await runner.participant.decide(
+                    obs, history, runner.summary_body, runner.latest_highlight
+                )
         await db.log_turn(
             runner.conn,
             runner.runner_id,
@@ -475,7 +487,8 @@ async def run(
     if checkpoint is not None:
         state = restore_state(checkpoint)
         runner.decision = checkpoint.last_decision
-        runner.summary = checkpoint.summary_text
+        runner.summary_body = checkpoint.summary_body
+        runner.latest_highlight = checkpoint.latest_highlight
         runner.summary_covers_up_to_elapsed_min = checkpoint.summary_covers_up_to_elapsed_min
         runner.summary_folded_count = checkpoint.summary_folded_count
         runner.last_checkpoint_elapsed_min = checkpoint.elapsed_min
@@ -483,7 +496,7 @@ async def run(
             "Resuming %s from checkpoint at elapsed_min=%.1f (summary: %d chars)",
             runner.runner_id,
             checkpoint.elapsed_min,
-            len(checkpoint.summary_text),
+            len(checkpoint.summary_body) + len(checkpoint.latest_highlight),
         )
     else:
         rng = random.Random()

@@ -32,7 +32,7 @@ class _FakeParticipant:
         self.persona = SimpleNamespace(name=name)
         self._outcome = outcome
 
-    async def decide(self, obs, history, summary=""):
+    async def decide(self, obs, history, summary_body="", latest_highlight=""):
         return self._outcome
 
 
@@ -111,7 +111,7 @@ class _RaisingParticipant:
     def __init__(self, name: str):
         self.persona = SimpleNamespace(name=name)
 
-    async def decide(self, obs, history, summary=""):
+    async def decide(self, obs, history, summary_body="", latest_highlight=""):
         raise ValueError("something else broke")
 
 

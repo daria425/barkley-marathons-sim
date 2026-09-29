@@ -104,7 +104,12 @@ class Checkpoint(BaseModel):
     last_ate_min_ago: float
     last_decision: Decision
     rng_state: str
-    summary_text: str
+    # ADR-0018: split from a single ever-growing summary_text into a monologue-free running
+    # log (summary_body) plus the single most recent segment's quoted monologue
+    # (latest_highlight, replaced not appended on every fold) — see agents/memory.py's
+    # compact_if_needed docstring.
+    summary_body: str
+    latest_highlight: str = ""
     summary_covers_up_to_elapsed_min: int
     summary_folded_count: int = 0
 

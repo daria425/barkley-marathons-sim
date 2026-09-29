@@ -40,7 +40,7 @@ def make_checkpoint(runner_id: str = "test-runner", rng: random.Random | None = 
             monologue="still going",
         ),
         rng_state=db.serialize_rng_state(rng),
-        summary_text="Miles 0-10: uneventful.",
+        summary_body="Miles 0-10: uneventful.",
         summary_covers_up_to_elapsed_min=100,
     )
 

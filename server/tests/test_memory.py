@@ -12,6 +12,7 @@ from agents.memory import (
     compact_segment,
     extract_segment_facts,
     format_observation,
+    render_highlight,
     render_segment,
 )
 from models import Decision, Observation
@@ -206,9 +207,10 @@ def test_format_observation_omits_hallucination_line_when_none():
 
 def test_compact_segment_stays_clean_before_hallucination_onset():
     """Well below HALLUCINATION_ONSET_MIN, jumble_severity_for is 0 — compact_segment must be
-    exactly render_segment's output, untouched."""
+    exactly render_segment/render_highlight's output, untouched."""
     turns = [make_turn(0, monologue="feeling strong"), make_turn(1, monologue="still strong")]
-    assert compact_segment(turns) == render_segment(extract_segment_facts(turns))
+    facts = extract_segment_facts(turns)
+    assert compact_segment(turns) == (render_segment(facts), render_highlight(facts))
 
 
 def test_compact_segment_jumbles_once_sleep_debt_has_climbed():
@@ -218,13 +220,23 @@ def test_compact_segment_jumbles_once_sleep_debt_has_climbed():
     turns = [
         make_turn(late, monologue="ate 3x and drank 4x, found 2 books, feeling strong out here")
     ]
-    assert compact_segment(turns) != render_segment(extract_segment_facts(turns))
+    facts = extract_segment_facts(turns)
+    assert compact_segment(turns) != (render_segment(facts), render_highlight(facts))
+
+
+def test_render_segment_omits_monologue():
+    """ADR-0018: the facts line itself never carries the quote — only render_highlight does,
+    so it can be replaced instead of accumulated."""
+    turns = [make_turn(0, monologue="a very distinctive phrase nobody else would write")]
+    text = render_segment(extract_segment_facts(turns))
+    assert "distinctive phrase" not in text
 
 
 def test_compact_if_needed_leaves_short_history_untouched():
     turns = [make_turn(i) for i in range(SLIDING_WINDOW_N)]
-    summary, remaining, folded_count = compact_if_needed("", turns, folded_count=0)
-    assert summary == ""
+    body, highlight, remaining, folded_count = compact_if_needed("", "", turns, folded_count=0)
+    assert body == ""
+    assert highlight == ""
     assert remaining == turns
     assert folded_count == 0
 
@@ -232,28 +244,34 @@ def test_compact_if_needed_leaves_short_history_untouched():
 def test_compact_if_needed_folds_oldest_and_keeps_last_n():
     n = 5
     turns = [make_turn(i) for i in range(n + 3)]
-    summary, remaining, folded_count = compact_if_needed(
-        "", turns, folded_count=0, n=n, batch_size=1
+    body, highlight, remaining, folded_count = compact_if_needed(
+        "", "", turns, folded_count=0, n=n, batch_size=1
     )
     assert remaining == turns[3:]
-    assert summary != ""
+    assert body != ""
+    assert highlight != ""
     assert folded_count == 3
 
 
-def test_compact_if_needed_appends_to_existing_summary():
+def test_compact_if_needed_appends_body_but_replaces_highlight():
     n = 3
     turns = [make_turn(i) for i in range(n + 2)]
-    summary, _, _ = compact_if_needed(
-        "earlier summary text", turns, folded_count=0, n=n, batch_size=1
+    body, highlight, _, _ = compact_if_needed(
+        "earlier summary text", "earlier highlight", turns, folded_count=0, n=n, batch_size=1
     )
-    assert summary.startswith("earlier summary text\n")
+    assert body.startswith("earlier summary text\n")
+    assert "earlier highlight" not in highlight
 
 
 def test_compact_if_needed_is_deterministic():
     n = 4
     turns = [make_turn(i, feel="bonking" if i == 1 else "feeling good") for i in range(n + 2)]
-    result_a = compact_if_needed("prior", turns, folded_count=0, n=n, batch_size=1)
-    result_b = compact_if_needed("prior", turns, folded_count=0, n=n, batch_size=1)
+    result_a = compact_if_needed(
+        "prior", "prior highlight", turns, folded_count=0, n=n, batch_size=1
+    )
+    result_b = compact_if_needed(
+        "prior", "prior highlight", turns, folded_count=0, n=n, batch_size=1
+    )
     assert result_a == result_b
 
 
@@ -262,27 +280,46 @@ def test_compact_if_needed_holds_pending_turns_below_batch_size():
     pending rather than each spawning its own summary line (the pre-fix behavior)."""
     n = 5
     turns = [make_turn(i) for i in range(n + 2)]  # only 2 turns pending, batch_size defaults 20
-    summary, remaining, folded_count = compact_if_needed("", turns, folded_count=0, n=n)
-    assert summary == ""
+    body, highlight, remaining, folded_count = compact_if_needed("", "", turns, folded_count=0, n=n)
+    assert body == ""
+    assert highlight == ""
     assert folded_count == 0
     assert remaining == turns[-n:]
 
 
 def test_compact_if_needed_folds_one_segment_per_batch_not_per_tick():
     """Regression test for the original bug: replaying loop.py's call-every-tick pattern across
-    many ticks should produce one summary line per full batch, not one line per tick."""
+    many ticks should produce one summary-body line per full batch, not one line per tick."""
     n = 5
     batch_size = 4
-    summary = ""
+    body = ""
+    highlight = ""
     folded_count = 0
     all_turns: list[tuple] = []
     for i in range(30):
         all_turns.append(make_turn(i))
-        summary, _, folded_count = compact_if_needed(
-            summary, all_turns, folded_count, n=n, batch_size=batch_size
+        body, highlight, _, folded_count = compact_if_needed(
+            body, highlight, all_turns, folded_count, n=n, batch_size=batch_size
         )
     pending_after_last_batch = (len(all_turns) - n - folded_count) % batch_size
     expected_batches = (len(all_turns) - n) // batch_size
     assert folded_count == expected_batches * batch_size
-    assert summary.count("\n") == expected_batches - 1
+    assert body.count("\n") == expected_batches - 1
     assert pending_after_last_batch < batch_size
+
+
+def test_compact_if_needed_highlight_never_accumulates_across_many_folds():
+    """ADR-0018's core guarantee: however many segments get folded, latest_highlight always
+    holds exactly one quoted monologue, never a growing chain of them."""
+    n = 2
+    batch_size = 2
+    body = ""
+    highlight = ""
+    folded_count = 0
+    all_turns: list[tuple] = []
+    for i in range(40):
+        all_turns.append(make_turn(i, monologue=f"thought number {i}"))
+        body, highlight, _, folded_count = compact_if_needed(
+            body, highlight, all_turns, folded_count, n=n, batch_size=batch_size
+        )
+    assert highlight.count('"') == 2

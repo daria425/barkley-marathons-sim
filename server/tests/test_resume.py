@@ -60,7 +60,7 @@ def _make_checkpoint(state, last_decision: Decision) -> Checkpoint:
         last_ate_min_ago=state.last_ate_min_ago,
         last_decision=last_decision,
         rng_state=db.serialize_rng_state(state.rng),
-        summary_text="earlier summary",
+        summary_body="earlier summary",
         summary_covers_up_to_elapsed_min=0,
     )
 

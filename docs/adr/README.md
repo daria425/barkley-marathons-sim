@@ -19,3 +19,4 @@
 | [0015](0015-per-tick-brain-cadence-and-book-found-event.md) | Per-tick brain-call cadence, with book-found surfaced via `Observation.event` | accepted | 2026-09-24 |
 | [0016](0016-generalized-special-event-system.md) | Generalized special-event system, extending `Observation.event` past `found_book` | accepted | 2026-09-25 |
 | [0017](0017-sleep-debt-hallucinations.md) | Sleep-debt hallucinations — free-text `Observation.hallucination` plus jumbled compaction memory | accepted | 2026-09-25 |
+| [0018](0018-split-summary-monologue-from-facts.md) | Split the running summary into a monologue-free body plus a single replaced highlight | accepted | 2026-09-29 |

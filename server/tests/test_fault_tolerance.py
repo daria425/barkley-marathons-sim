@@ -21,7 +21,7 @@ class _FakeParticipant:
     def __init__(self, persona):
         self.persona = persona
 
-    async def decide(self, obs, history, summary=""):
+    async def decide(self, obs, history, summary_body="", latest_highlight=""):
         return BrainOutcome(decision=loop_mod.STARTING_DECISION)
 
 
@@ -68,7 +68,7 @@ class _AlwaysFailingParticipant:
     def __init__(self, persona):
         self.persona = persona
 
-    async def decide(self, obs, history, summary=""):
+    async def decide(self, obs, history, summary_body="", latest_highlight=""):
         return BrainOutcome(decision=None, failure_reason="simulated outage")
 
 
