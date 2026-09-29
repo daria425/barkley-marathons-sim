@@ -4,6 +4,7 @@ everything else (physiology, weather, memory, logging) already was.
 """
 
 import asyncio
+import logging
 import os
 import random
 from collections.abc import Awaitable, Callable
@@ -21,6 +22,8 @@ from models import Checkpoint, Decision, Observation, RaceState, RunnerState
 from sim import course as course_mod
 from sim import frozen_head_state_park, hallucinations, physiology
 from sim.sim_utils import format_clock_time
+
+logger = logging.getLogger(__name__)
 
 # Called once per tick with the current RaceState, and again (with an updated RunnerState
 # after a fresh Decision) whenever a brain call lands — main.py wires this to its WS
@@ -308,7 +311,9 @@ async def _compact_and_checkpoint(
     if new_summary != runner.summary:
         newly_folded_elapsed = all_turns[new_folded_count - 1][0].elapsed_min
         runner.summary_covers_up_to_elapsed_min = round(newly_folded_elapsed)
-        print(f"[{obs.clock_time}] ...{runner.runner_id}'s memory compacts: {new_summary!r}")
+        logger.info(
+            "[%s] ...%s's memory compacts: %r", obs.clock_time, runner.runner_id, new_summary
+        )
     runner.summary = new_summary
     runner.summary_folded_count = new_folded_count
 
@@ -353,16 +358,18 @@ async def think(
         # BrainOutcome can't have captured a reason for. Best-effort persisted too — a "the
         # sim never waits for the LLM" hiccup still deserves a durable record, not just print().
         reason = f"{type(e).__name__}: {e}"
-        print(f"[{obs.clock_time}] ...{runner.runner_id} mumbles incoherently... ({reason})")
+        logger.info(
+            "[%s] ...%s mumbles incoherently... (%s)", obs.clock_time, runner.runner_id, reason
+        )
         try:
             await db.log_turn(runner.conn, runner.runner_id, true_lat, true_lon, obs, None, reason)
         except Exception:
             pass  # persisting the failure failing too shouldn't crash the tick loop either
         return
     if outcome.decision is None:
-        print(f"[{obs.clock_time}] ...{runner.runner_id} mumbles incoherently...")
+        logger.info("[%s] ...%s mumbles incoherently...", obs.clock_time, runner.runner_id)
         return
-    print(f"[{obs.clock_time}] {runner.runner_id}: {outcome.decision.monologue!r}")
+    logger.info("[%s] %s: %r", obs.clock_time, runner.runner_id, outcome.decision.monologue)
     runner.decision = outcome.decision
     if on_update is not None:
         runner_state = _build_runner_state(runner, obs, snapshot, outcome.decision)
@@ -466,16 +473,18 @@ async def run(
         runner.summary_covers_up_to_elapsed_min = checkpoint.summary_covers_up_to_elapsed_min
         runner.summary_folded_count = checkpoint.summary_folded_count
         runner.last_checkpoint_elapsed_min = checkpoint.elapsed_min
-        print(
-            f"Resuming {runner.runner_id} from checkpoint at elapsed_min="
-            f"{checkpoint.elapsed_min:.1f} (summary: {len(checkpoint.summary_text)} chars)"
+        logger.info(
+            "Resuming %s from checkpoint at elapsed_min=%.1f (summary: %d chars)",
+            runner.runner_id,
+            checkpoint.elapsed_min,
+            len(checkpoint.summary_text),
         )
     else:
         rng = random.Random()
         # Barkley's horn blows any time midnight-noon
         start_hour = rng.uniform(0.0, 12.0)
         state = build_initial_state(rng, start_hour)
-        print(f"Starting {runner.runner_id} fresh, start_hour={start_hour:.2f}")
+        logger.info("Starting %s fresh, start_hour=%.2f", runner.runner_id, start_hour)
 
     tasks: list[asyncio.Task] = []
     n_ticks = int(duration_min / TICK_DT_MIN)
@@ -503,7 +512,13 @@ async def run(
                 rng_state=db.serialize_rng_state(state.rng),
             )
             last_good_snapshot = snapshot
-            print(f"[{obs.clock_time}] HR={obs.hr} pace={obs.pace_min_per_km:.1f} feel={obs.feel}")
+            logger.info(
+                "[%s] HR=%d pace=%.1f feel=%s",
+                obs.clock_time,
+                obs.hr,
+                obs.pace_min_per_km,
+                obs.feel,
+            )
             if on_update is not None:
                 runner_state = _build_runner_state(runner, obs, snapshot, decision)
                 await on_update(_build_race_state(runner_state, snapshot))
@@ -521,14 +536,18 @@ async def run(
                 tasks = [t for t in tasks if not t.done()]
             await asyncio.sleep(TICK_DT_MIN * 60 / speed)
     except Exception as e:
-        print(f"Tick loop crashed ({type(e).__name__}: {e}) — attempting best-effort checkpoint")
+        logger.info(
+            "Tick loop crashed (%s: %s) — attempting best-effort checkpoint",
+            type(e).__name__,
+            e,
+        )
         if last_good_snapshot is not None:
             try:
                 checkpoint = _build_checkpoint(runner, last_good_snapshot, runner.decision)
                 await db.save_checkpoint(conn, checkpoint)
-                print("Best-effort checkpoint saved before re-raising")
+                logger.info("Best-effort checkpoint saved before re-raising")
             except Exception as checkpoint_error:
-                print(f"Best-effort checkpoint also failed: {checkpoint_error}")
+                logger.info("Best-effort checkpoint also failed: %s", checkpoint_error)
         raise
     finally:
         # return_exceptions=True: think() already swallows its own exceptions (CLAUDE.md's

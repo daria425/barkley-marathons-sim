@@ -7,6 +7,7 @@ docstring for why (agents/participant.py builds its AsyncAnthropic client at imp
 """
 
 import asyncio
+import logging
 import os
 import secrets
 from datetime import UTC, datetime
@@ -15,6 +16,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from fastapi.middleware.cors import CORSMiddleware
 
 from observability import setup_observability
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 setup_observability()
 
@@ -109,15 +113,18 @@ async def _supervised_run(speed: float, duration_min: float) -> None:
                 consecutive_failures = 0 if progressed > 0 else consecutive_failures + 1
                 _health["restart_count"] += 1
                 _health["last_error"] = f"{type(e).__name__}: {e}"
-                print(
-                    f"[supervisor] run() crashed ({_health['last_error']}); "
-                    f"{remaining:.1f} sim-min remaining, {consecutive_failures} consecutive "
-                    "failure(s) with no progress"
+                logger.info(
+                    "[supervisor] run() crashed (%s); %.1f sim-min remaining, %d consecutive "
+                    "failure(s) with no progress",
+                    _health["last_error"],
+                    remaining,
+                    consecutive_failures,
                 )
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                    print(
-                        f"[supervisor] giving up after {MAX_CONSECUTIVE_FAILURES} consecutive "
-                        "failures with no progress — last checkpoint is intact for inspection"
+                    logger.info(
+                        "[supervisor] giving up after %d consecutive failures with no "
+                        "progress — last checkpoint is intact for inspection",
+                        MAX_CONSECUTIVE_FAILURES,
                     )
                     return
                 await asyncio.sleep(RESTART_BACKOFF_SEC)

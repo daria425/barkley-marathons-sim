@@ -12,6 +12,7 @@ way, .create() is just the one that's actually observable.
 """
 
 import json
+import logging
 from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
@@ -20,6 +21,8 @@ from anthropic.types import Message
 from agents.memory import format_observation, turns_to_messages
 from agents.personas import Persona
 from models import Decision, Observation
+
+logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
 
@@ -101,5 +104,5 @@ class Participant:
             return BrainOutcome(decision=Decision.model_validate(json.loads(text)))
         except Exception as e:
             reason = f"{type(e).__name__}: {e}"
-            print(f"[{self.persona.name}] brain call failed ({reason})")
+            logger.info("[%s] brain call failed (%s)", self.persona.name, reason)
             return BrainOutcome(decision=None, failure_reason=reason)

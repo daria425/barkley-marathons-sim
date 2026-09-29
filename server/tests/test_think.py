@@ -51,7 +51,7 @@ def _snapshot(state) -> StateSnapshot:
     )
 
 
-def test_think_keeps_old_decision_and_skips_checkpoint_on_failed_brain_call(capsys):
+def test_think_keeps_old_decision_and_skips_checkpoint_on_failed_brain_call(caplog):
     failure = BrainOutcome(decision=None, failure_reason="RuntimeError: simulated outage")
 
     async def scenario():
@@ -68,8 +68,9 @@ def test_think_keeps_old_decision_and_skips_checkpoint_on_failed_brain_call(caps
         assert failures == [(obs.elapsed_min, "RuntimeError: simulated outage")]
         await conn.close()
 
-    asyncio.run(scenario())
-    assert "mumbles incoherently" in capsys.readouterr().out
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())
+    assert "mumbles incoherently" in caplog.text
 
 
 def test_think_updates_decision_and_checkpoints_on_successful_brain_call():
@@ -114,7 +115,7 @@ class _RaisingParticipant:
         raise ValueError("something else broke")
 
 
-def test_think_persists_a_failure_reason_even_for_the_outer_except_path(capsys):
+def test_think_persists_a_failure_reason_even_for_the_outer_except_path(caplog):
     async def scenario():
         conn = await db.init_db(":memory:")
         runner = RunnerLoop(_RaisingParticipant("Hank"), conn, asyncio.Semaphore(5))
@@ -128,5 +129,6 @@ def test_think_persists_a_failure_reason_even_for_the_outer_except_path(capsys):
         assert failures == [(obs.elapsed_min, "ValueError: something else broke")]
         await conn.close()
 
-    asyncio.run(scenario())
-    assert "mumbles incoherently" in capsys.readouterr().out
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())
+    assert "mumbles incoherently" in caplog.text

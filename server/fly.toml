@@ -3,6 +3,13 @@ primary_region = "iad"
 
 [build]
 
+# Default shared-cpu-1x is 256MB — too tight for FastAPI + langfuse/OTel instrumentation +
+# the anthropic SDK + gpxpy parsing a ~5MB course file, and was causing an OOM crash loop in
+# prod (see git history). 512MB gives real headroom without jumping to a dedicated CPU tier.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
 [env]
   SIM_DB_PATH = "/data/race.db"
 

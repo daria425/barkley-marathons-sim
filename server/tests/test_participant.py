@@ -55,17 +55,18 @@ class _FakeMessage:
         self.content = [_FakeBlock(text)]
 
 
-def test_decide_returns_none_with_reason_on_api_error(monkeypatch, capsys):
+def test_decide_returns_none_with_reason_on_api_error(monkeypatch, caplog):
     async def fake_complete(system, messages):
         raise RuntimeError("simulated API outage")
 
     monkeypatch.setattr(participant_module, "complete", fake_complete)
 
-    outcome = asyncio.run(Participant(_persona()).decide(_obs()))
+    with caplog.at_level("INFO"):
+        outcome = asyncio.run(Participant(_persona()).decide(_obs()))
 
     assert outcome.decision is None
     assert "RuntimeError" in outcome.failure_reason
-    assert "RuntimeError" in capsys.readouterr().out
+    assert "RuntimeError" in caplog.text
 
 
 def test_decide_returns_none_with_reason_on_invalid_json(monkeypatch):
