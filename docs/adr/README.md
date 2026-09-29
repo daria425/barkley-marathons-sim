@@ -20,3 +20,4 @@
 | [0016](0016-generalized-special-event-system.md) | Generalized special-event system, extending `Observation.event` past `found_book` | accepted | 2026-09-25 |
 | [0017](0017-sleep-debt-hallucinations.md) | Sleep-debt hallucinations — free-text `Observation.hallucination` plus jumbled compaction memory | accepted | 2026-09-25 |
 | [0018](0018-split-summary-monologue-from-facts.md) | Split the running summary into a monologue-free body plus a single replaced highlight | accepted | 2026-09-29 |
+| [0019](0019-race-end-mechanism.md) | Race-end mechanism — finished / dnf_cutoff / dnf_quit | accepted | 2026-09-29 |

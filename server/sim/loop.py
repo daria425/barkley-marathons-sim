@@ -18,9 +18,10 @@ import db
 from agents.memory import COMPACT_BATCH_SIZE, SLIDING_WINDOW_N, compact_if_needed
 from agents.participant import Participant
 from agents.personas import load_persona
-from models import Checkpoint, Decision, Observation, RaceState, RunnerState
+from models import Checkpoint, Decision, Observation, RaceState, RunnerState, RunnerStatus
 from sim import course as course_mod
 from sim import frozen_head_state_park, hallucinations, physiology
+from sim.sim_constants import TOTAL_LOOPS
 from sim.sim_utils import format_clock_time
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,9 @@ class RunnerLoop:
         self.conn = conn
         self.sem = sem
         self.decision = STARTING_DECISION
+        # ADR-0019: "running" until one of three terminal states fires (see run()'s tick loop).
+        # Defaults are the fresh-start case; run() overwrites it from the checkpoint on resume.
+        self.status: RunnerStatus = "running"
         # ADR-0008/0018: running compacted summary + how far it reaches. summary_body is the
         # monologue-free facts log (ever-growing); latest_highlight is just the most recently
         # folded segment's quoted monologue, replaced (not appended) on every fold. Defaults
@@ -301,6 +305,7 @@ def _build_checkpoint(
         latest_highlight=runner.latest_highlight,
         summary_covers_up_to_elapsed_min=runner.summary_covers_up_to_elapsed_min,
         summary_folded_count=runner.summary_folded_count,
+        status=runner.status,
     )
 
 
@@ -411,6 +416,7 @@ def _build_runner_state(
         last_decision=decision,
         last_event=obs.event,
         last_hallucination=obs.hallucination,
+        status=runner.status,
     )
 
 
@@ -463,6 +469,125 @@ def _build_observation(
     )
 
 
+def _check_race_end(state: LoopState, decision: Decision) -> RunnerStatus | None:
+    """ADR-0019: race-end detection for the tick just executed, checked in priority order —
+    finishing loop TOTAL_LOOPS beats a quit decision landing the same tick. Returns None while
+    still running. Reads state.loop/decision.quit directly rather than taking a StateSnapshot,
+    since both are already known right after advance_tick() without needing the rest of the
+    snapshot built."""
+    if state.loop > TOTAL_LOOPS:
+        return "finished"
+    if decision.quit:
+        return "dnf_quit"
+    return None
+
+
+async def _finalize_race_end(
+    runner: RunnerLoop,
+    obs: Observation,
+    snapshot: StateSnapshot,
+    decision: Decision,
+    conn: aiosqlite.Connection,
+    on_update: OnUpdate | None,
+) -> None:
+    """Announces a terminal runner.status once and writes the final checkpoint — shared by the
+    tick loop's in-loop break (finished/dnf_quit) and its for/else cutoff path (ADR-0019), which
+    both need the same "broadcast it, persist it" shape. Callers set runner.status before
+    calling this."""
+    logger.info("[%s] %s's race ends: %s", obs.clock_time, runner.runner_id, runner.status)
+    if on_update is not None:
+        runner_state = _build_runner_state(runner, obs, snapshot, decision)
+        await on_update(_build_race_state(runner_state, snapshot))
+    await db.save_checkpoint(conn, _build_checkpoint(runner, snapshot, decision))
+    runner.last_checkpoint_elapsed_min = snapshot.physio.elapsed_min
+
+
+async def _maybe_fallback_checkpoint(
+    runner: RunnerLoop, snapshot: StateSnapshot, decision: Decision, conn: aiosqlite.Connection
+) -> None:
+    """Normally checkpoints only happen on a successful brain decision
+    (_compact_and_checkpoint), which can go quiet for a long stretch during a brain-call
+    outage. This bounds how much sim-time such an outage can cost."""
+    if (
+        snapshot.physio.elapsed_min - runner.last_checkpoint_elapsed_min
+        >= FALLBACK_CHECKPOINT_INTERVAL_MIN
+    ):
+        await db.save_checkpoint(conn, _build_checkpoint(runner, snapshot, decision))
+        runner.last_checkpoint_elapsed_min = snapshot.physio.elapsed_min
+
+
+async def _broadcast_already_ended_race(
+    runner: RunnerLoop, checkpoint: Checkpoint, on_update: OnUpdate | None
+) -> None:
+    """ADR-0019: run() calls this instead of entering the tick loop when a loaded checkpoint's
+    status is already terminal — re-announces the existing outcome straight from the
+    checkpoint's own fields (no fresh tick to derive an Observation from), so a fresh WS client
+    or a stray /run call after the race is over sees the real outcome instead of nothing."""
+    if on_update is None:
+        return
+    runner_state = RunnerState(
+        persona_name=runner.runner_id,
+        bib_number=runner.participant.persona.bib_number,
+        physiology=checkpoint.physiology,
+        true_pos=checkpoint.true_pos,
+        current_terrain="",
+        believed_pos=checkpoint.believed_pos,
+        loop=checkpoint.loop,
+        books_found=checkpoint.books_found,
+        pace_min_per_km=0.0,
+        feel=physiology.describe_feel(checkpoint.physiology.glycogen_pct, False),
+        last_decision=checkpoint.last_decision,
+        status=runner.status,
+    )
+    await on_update(
+        RaceState(
+            elapsed_min=checkpoint.elapsed_min,
+            environment=checkpoint.environment,
+            runners={runner_state.persona_name: runner_state},
+        )
+    )
+
+
+async def _resume_or_start(
+    runner: RunnerLoop, conn: aiosqlite.Connection, on_update: OnUpdate | None
+) -> tuple[LoopState, bool]:
+    """Loads runner's checkpoint if one exists and restores LoopState from it, or builds fresh
+    initial state otherwise. Returns (state, already_ended) — already_ended is True when a
+    loaded checkpoint's status is already terminal (ADR-0019), in which case run() must not
+    enter the tick loop; this function has already re-announced the existing outcome via
+    _broadcast_already_ended_race."""
+    checkpoint = await db.load_checkpoint(conn, runner.runner_id)
+    if checkpoint is None:
+        rng = random.Random()
+        # Barkley's horn blows any time midnight-noon
+        start_hour = rng.uniform(0.0, 12.0)
+        state = build_initial_state(rng, start_hour)
+        logger.info("Starting %s fresh, start_hour=%.2f", runner.runner_id, start_hour)
+        return state, False
+
+    state = restore_state(checkpoint)
+    runner.decision = checkpoint.last_decision
+    runner.summary_body = checkpoint.summary_body
+    runner.latest_highlight = checkpoint.latest_highlight
+    runner.summary_covers_up_to_elapsed_min = checkpoint.summary_covers_up_to_elapsed_min
+    runner.summary_folded_count = checkpoint.summary_folded_count
+    runner.last_checkpoint_elapsed_min = checkpoint.elapsed_min
+    runner.status = checkpoint.status
+    logger.info(
+        "Resuming %s from checkpoint at elapsed_min=%.1f (summary: %d chars, status=%s)",
+        runner.runner_id,
+        checkpoint.elapsed_min,
+        len(checkpoint.summary_body) + len(checkpoint.latest_highlight),
+        runner.status,
+    )
+    if runner.status != "running":
+        # ADR-0019: the race already ended before this process (re)started — don't re-enter the
+        # tick loop and tick a finished/DNF'd runner for another duration_min.
+        await _broadcast_already_ended_race(runner, checkpoint, on_update)
+        return state, True
+    return state, False
+
+
 async def run(
     speed: float = 1.0,
     duration_min: float = FULL_RACE_MINUTES,
@@ -483,27 +608,10 @@ async def run(
     conn = await db.init_db(DB_PATH)
     runner = RunnerLoop(Participant(load_persona(PERSONA_PATH)), conn, asyncio.Semaphore(5))
 
-    checkpoint = await db.load_checkpoint(conn, runner.runner_id)
-    if checkpoint is not None:
-        state = restore_state(checkpoint)
-        runner.decision = checkpoint.last_decision
-        runner.summary_body = checkpoint.summary_body
-        runner.latest_highlight = checkpoint.latest_highlight
-        runner.summary_covers_up_to_elapsed_min = checkpoint.summary_covers_up_to_elapsed_min
-        runner.summary_folded_count = checkpoint.summary_folded_count
-        runner.last_checkpoint_elapsed_min = checkpoint.elapsed_min
-        logger.info(
-            "Resuming %s from checkpoint at elapsed_min=%.1f (summary: %d chars)",
-            runner.runner_id,
-            checkpoint.elapsed_min,
-            len(checkpoint.summary_body) + len(checkpoint.latest_highlight),
-        )
-    else:
-        rng = random.Random()
-        # Barkley's horn blows any time midnight-noon
-        start_hour = rng.uniform(0.0, 12.0)
-        state = build_initial_state(rng, start_hour)
-        logger.info("Starting %s fresh, start_hour=%.2f", runner.runner_id, start_hour)
+    state, already_ended = await _resume_or_start(runner, conn, on_update)
+    if already_ended:
+        await conn.close()
+        return
 
     tasks: list[asyncio.Task] = []
     n_ticks = int(duration_min / TICK_DT_MIN)
@@ -538,22 +646,27 @@ async def run(
                 obs.pace_min_per_km,
                 obs.feel,
             )
+            terminal_status = _check_race_end(state, decision)
+            if terminal_status is not None:
+                runner.status = terminal_status
+                await _finalize_race_end(runner, obs, snapshot, decision, conn, on_update)
+                break
             if on_update is not None:
                 runner_state = _build_runner_state(runner, obs, snapshot, decision)
                 await on_update(_build_race_state(runner_state, snapshot))
-            # Fallback checkpoint: normally checkpoints only happen on a successful brain
-            # decision (_compact_and_checkpoint), which can go quiet for a long stretch during
-            # a brain-call outage. This bounds how much sim-time such an outage can cost.
-            if (
-                snapshot.physio.elapsed_min - runner.last_checkpoint_elapsed_min
-                >= FALLBACK_CHECKPOINT_INTERVAL_MIN
-            ):
-                await db.save_checkpoint(conn, _build_checkpoint(runner, snapshot, decision))
-                runner.last_checkpoint_elapsed_min = snapshot.physio.elapsed_min
+            await _maybe_fallback_checkpoint(runner, snapshot, decision, conn)
             tasks.append(asyncio.create_task(think(runner, obs, snapshot, on_update)))
             if len(tasks) % TASK_PRUNE_INTERVAL_TICKS == 0:
                 tasks = [t for t in tasks if not t.done()]
             await asyncio.sleep(TICK_DT_MIN * 60 / speed)
+        else:
+            # for/else: the loop ran all n_ticks without break — duration_min is the actual
+            # race cutoff (not just a dev-convenience early stop), so exhausting it is a real
+            # DNF, not a silent "we just stopped watching". last_good_snapshot is None only if
+            # n_ticks was 0 (nothing ever ticked, nothing to announce).
+            if last_good_snapshot is not None:
+                runner.status = "dnf_cutoff"
+                await _finalize_race_end(runner, obs, last_good_snapshot, decision, conn, on_update)
     except Exception as e:
         logger.info(
             "Tick loop crashed (%s: %s) — attempting best-effort checkpoint",

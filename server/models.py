@@ -23,6 +23,13 @@ EventType = Literal[
     "dropped_water_bottle",
 ]
 
+# ADR-0019: a runner's race-end state. "running" the whole race until one of three terminal
+# states fires (sim/loop.py's tick loop): completing sim.sim_constants.TOTAL_LOOPS ("finished"),
+# Decision.quit going true ("dnf_quit"), or the tick loop exhausting its duration_min budget
+# without either of those happening first ("dnf_cutoff") — duration_min IS the race cutoff, not
+# just a dev-convenience early stop, so a short slice run genuinely ends dnf_cutoff too.
+RunnerStatus = Literal["running", "finished", "dnf_cutoff", "dnf_quit"]
+
 
 class Observation(BaseModel):
     elapsed_min: int
@@ -77,6 +84,10 @@ class RunnerState(BaseModel):
     # most recent Observation.hallucination, mirrored the same way (ADR-0017) — free text, not
     # a Literal, since hallucination lines are curated prose, not a small fixed vocabulary
     last_hallucination: str | None = None
+    # ADR-0019: "running" for the whole race until one of three terminal states fires. The
+    # frontend differentiates finish/DNF-cutoff/DNF-quit off this field, not off the WS stream
+    # simply going quiet.
+    status: RunnerStatus = "running"
 
 
 class Checkpoint(BaseModel):
@@ -110,6 +121,9 @@ class Checkpoint(BaseModel):
     # compact_if_needed docstring.
     summary_body: str
     latest_highlight: str = ""
+    # ADR-0019: persisted so a resumed run recognizes an already-ended race and doesn't re-enter
+    # the tick loop — see sim/loop.py's run() resume path.
+    status: RunnerStatus = "running"
     summary_covers_up_to_elapsed_min: int
     summary_folded_count: int = 0
 

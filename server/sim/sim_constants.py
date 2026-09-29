@@ -31,6 +31,11 @@ LOOP_COMPLETE_RADIUS_KM = 0.1
 # must have covered at least half the loop to "complete" it
 LOOP_COMPLETE_MIN_FRACTION = 0.5
 
+# ADR-0019: race rule, not a course-shape fact — sim/course.py stays ignorant of how many loops
+# a race requires (it only detects when ONE loop completes); sim/loop.py's tick loop is what
+# compares state.loop against this to decide "finished".
+TOTAL_LOOPS = 5
+
 # Believed-position noise (comedy engine): base wobble + fog/night/fatigue add-ons, in km.
 NOISE_BASE_KM = 0.02
 NOISE_FOG_SCALE_KM = 0.15  # at fog_pct=100
