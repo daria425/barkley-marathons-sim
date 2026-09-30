@@ -117,11 +117,15 @@ async def get_recent_turns(
 ) -> list[tuple[Observation, Decision]]:
     """The last `limit` turns for this runner that actually produced a Decision, oldest
     first (ready to replay in prompt order). Turns with a null decision (failed brain calls)
-    are skipped — there's nothing to replay as the assistant's prior turn."""
+    are skipped — there's nothing to replay as the assistant's prior turn.
+
+    Ordered by row `id` (insertion order), NOT elapsed_min: log_turn rounds elapsed_min to whole
+    minutes, so several turns tie on it, and ordering by it scrambled the window replayed to
+    the LLM within each minute (ties come back in arbitrary order, and this query reverses)."""
     cursor = await conn.execute(
         "SELECT observation_json, decision_json FROM turns "
         "WHERE runner_id = ? AND decision_json IS NOT NULL "
-        "ORDER BY elapsed_min DESC LIMIT ?",
+        "ORDER BY id DESC LIMIT ?",
         (runner_id, limit),
     )
     rows = await cursor.fetchall()
@@ -140,6 +144,26 @@ async def count_turns(conn: aiosqlite.Connection, runner_id: str) -> int:
     return count
 
 
+async def get_monologues_page(
+    conn: aiosqlite.Connection, runner_id: str, limit: int, before: int | None = None
+) -> tuple[list[tuple[int, float, str]], bool]:
+    """One page of (id, elapsed_min, monologue) for the frontend feed, oldest-first, plus
+    whether older rows exist past this page. Keyset-paginated and ordered on the row `id`
+    (`before` is an exclusive id), NOT elapsed_min: log_turn rounds elapsed_min to whole
+    minutes, so several turns share one value and it can neither order turns nor serve as a
+    cursor without skipping rows at a page boundary. Uses json_extract so a page never parses
+    whole Observation/Decision blobs in Python — memory per call is bounded by `limit`."""
+    cursor = await conn.execute(
+        "SELECT id, elapsed_min, json_extract(decision_json, '$.monologue') FROM turns "
+        "WHERE runner_id = ? AND decision_json IS NOT NULL AND (? IS NULL OR id < ?) "
+        "ORDER BY id DESC LIMIT ?",
+        (runner_id, before, before, limit + 1),
+    )
+    rows = await cursor.fetchall()
+    has_more = len(rows) > limit
+    return [(i, elapsed, text) for i, elapsed, text in reversed(rows[:limit]) if text], has_more
+
+
 async def get_all_turns(
     conn: aiosqlite.Connection, runner_id: str
 ) -> list[tuple[Observation, Decision]]:
@@ -148,7 +172,7 @@ async def get_all_turns(
     find the turns that have aged out of the last-N window."""
     cursor = await conn.execute(
         "SELECT observation_json, decision_json FROM turns "
-        "WHERE runner_id = ? AND decision_json IS NOT NULL ORDER BY elapsed_min ASC",
+        "WHERE runner_id = ? AND decision_json IS NOT NULL ORDER BY id ASC",
         (runner_id,),
     )
     rows = await cursor.fetchall()
@@ -168,7 +192,7 @@ async def get_failures(
     cursor = await conn.execute(
         "SELECT elapsed_min, failure_reason FROM turns "
         "WHERE runner_id = ? AND decision_json IS NULL "
-        "ORDER BY elapsed_min DESC LIMIT ?",
+        "ORDER BY id DESC LIMIT ?",
         (runner_id, limit),
     )
     return await cursor.fetchall()

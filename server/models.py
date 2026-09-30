@@ -154,3 +154,21 @@ class CourseGeometry(BaseModel):
     # (lat, lon), oldest-to-loop-completion order
     points: list[tuple[float, float]]
     books: list[CourseBook]
+
+
+class MonologueHistoryEntry(BaseModel):
+    # turns-table row id: unique and in insertion order (elapsed_min is rounded to whole
+    # minutes, so it isn't), used as the `before` cursor for paging further back
+    id: int
+    elapsed_min: float
+    text: str
+
+
+class MonologueHistory(BaseModel):
+    """One page of a runner's past monologues for GET /monologues/{persona_name} — the /ws
+    stream only ever carries the latest decision, so a client that connects late (or
+    reconnects) backfills its feed from here. Oldest-first; `has_more` means older entries
+    exist before the first one in `entries`."""
+
+    entries: list[MonologueHistoryEntry]
+    has_more: bool

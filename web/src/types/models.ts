@@ -10,3 +10,5 @@ export type FrozenHeadStatePark = components["schemas"]["FrozenHeadStatePark"];
 export type Decision = components["schemas"]["Decision"];
 export type CourseGeometry = components["schemas"]["CourseGeometry"];
 export type CourseBook = components["schemas"]["CourseBook"];
+export type MonologueHistory = components["schemas"]["MonologueHistory"];
+export type MonologueHistoryEntry = components["schemas"]["MonologueHistoryEntry"];

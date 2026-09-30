@@ -89,6 +89,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/monologues/{persona_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Monologue History
+         * @description Past monologues for the frontend feed (oldest-first, keyset-paginated via `before`, an
+         *     exclusive entry-id cursor). The /ws stream only carries the latest decision, so a late
+         *     or reconnecting client backfills from here. Read-only connection: a request before any run
+         *     has created the DB returns an empty page instead of creating an empty DB file.
+         */
+        get: operations["monologue_history_monologues__persona_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/schema": {
         parameters: {
             query?: never;
@@ -183,6 +206,28 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * MonologueHistory
+         * @description One page of a runner's past monologues for GET /monologues/{persona_name} — the /ws
+         *     stream only ever carries the latest decision, so a client that connects late (or
+         *     reconnects) backfills its feed from here. Oldest-first; `has_more` means older entries
+         *     exist before the first one in `entries`.
+         */
+        MonologueHistory: {
+            /** Entries */
+            entries: components["schemas"]["MonologueHistoryEntry"][];
+            /** Has More */
+            has_more: boolean;
+        };
+        /** MonologueHistoryEntry */
+        MonologueHistoryEntry: {
+            /** Id */
+            id: number;
+            /** Elapsed Min */
+            elapsed_min: number;
+            /** Text */
+            text: string;
         };
         /** PhysiologyState */
         PhysiologyState: {
@@ -371,6 +416,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CourseGeometry"];
+                };
+            };
+        };
+    };
+    monologue_history_monologues__persona_name__get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                before?: number | null;
+            };
+            header?: never;
+            path: {
+                persona_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonologueHistory"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

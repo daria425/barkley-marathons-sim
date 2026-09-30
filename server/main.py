@@ -10,9 +10,18 @@ import asyncio
 import logging
 import os
 import secrets
+import sqlite3
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 
 from observability import setup_observability
@@ -23,9 +32,18 @@ logger = logging.getLogger(__name__)
 setup_observability()
 
 # noqa: E402 below — must follow setup_observability(), see its docstring
-from models import CourseBook, CourseGeometry, RaceState  # noqa: E402
+import aiosqlite  # noqa: E402
+
+import db  # noqa: E402
+from models import (  # noqa: E402
+    CourseBook,
+    CourseGeometry,
+    MonologueHistory,
+    MonologueHistoryEntry,
+    RaceState,
+)
 from sim import course as course_mod  # noqa: E402
-from sim.loop import FULL_RACE_MINUTES, run  # noqa: E402
+from sim.loop import DB_PATH, FULL_RACE_MINUTES, run  # noqa: E402
 
 # How many consecutive run() crashes with zero sim-time progress the supervisor tolerates
 # before giving up — a transient hiccup (DB lock, a one-off bad state) gets retried, a
@@ -177,6 +195,35 @@ async def course_geometry():
     return CourseGeometry(
         points=[(p.lat, p.lon) for p in course.points],
         books=[CourseBook(index=b.index, name=b.name, lat=b.lat, lon=b.lon) for b in course.books],
+    )
+
+
+# Hard ceiling on one /monologues page regardless of what the client asks for (ADR-0021): every
+# request's memory use is bounded, so paging through a whole 60h race is many small reads, never
+# one multi-MB allocation on a 512MB machine.
+MONOLOGUE_PAGE_MAX = 200
+
+
+@app.get("/monologues/{persona_name}", response_model=MonologueHistory)
+async def monologue_history(
+    persona_name: str,
+    limit: int = Query(50, ge=1),
+    before: int | None = None,
+):
+    """Past monologues for the frontend feed (oldest-first, keyset-paginated via `before`, an
+    exclusive entry-id cursor). The /ws stream only carries the latest decision, so a late
+    or reconnecting client backfills from here. Read-only connection: a request before any run
+    has created the DB returns an empty page instead of creating an empty DB file."""
+    limit = min(limit, MONOLOGUE_PAGE_MAX)
+    try:
+        async with aiosqlite.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            await conn.execute("PRAGMA busy_timeout=5000")
+            rows, has_more = await db.get_monologues_page(conn, persona_name, limit, before)
+    except sqlite3.OperationalError:
+        return MonologueHistory(entries=[], has_more=False)
+    return MonologueHistory(
+        entries=[MonologueHistoryEntry(id=i, elapsed_min=e, text=t) for i, e, t in rows],
+        has_more=has_more,
     )
 
 

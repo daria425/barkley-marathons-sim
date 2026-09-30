@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import mockRaceState from "../mocks/mockRaceState.json";
-import { raceStateReceived } from "../store/raceSlice";
+import { fromHistory } from "../lib/monologues";
+import { fetchMonologuePage } from "../lib/monologueApi";
+import { monologueHistoryLatestLoaded, raceStateReceived } from "../store/raceSlice";
+import { store } from "../store/store";
 import { useAppDispatch } from "../store/hooks";
 import type { RaceState } from "../types/models";
 
@@ -34,14 +37,42 @@ export function useRaceSocket(): ConnectionStatus {
 
     let cancelled = false;
     let socket: WebSocket;
+    // Runners whose history has been backfilled on THIS connection. Reset on every (re)connect
+    // so a reconnect refills whatever was missed while the socket was down.
+    let backfilled = new Set<string>();
+
+    // The WS only ever carries the latest decision, so the feed's history comes from the REST
+    // endpoint (ADR-0021). A failure just leaves the feed live-only; "Load older" can retry.
+    function backfillMonologues(raceState: RaceState) {
+      for (const name of Object.keys(raceState.runners)) {
+        if (backfilled.has(name)) continue;
+        backfilled.add(name);
+        const sinceSeq = store.getState().race.monologueMeta[name]?.liveSeq ?? 0;
+        fetchMonologuePage(name)
+          .then((page) => {
+            if (cancelled) return;
+            dispatch(
+              monologueHistoryLatestLoaded({
+                personaName: name,
+                entries: fromHistory(page),
+                hasMore: page.has_more,
+                sinceSeq,
+              }),
+            );
+          })
+          .catch(() => backfilled.delete(name));
+      }
+    }
 
     function connect() {
       setStatus("connecting");
+      backfilled = new Set();
       socket = new WebSocket(WS_URL);
       socket.onopen = () => !cancelled && setStatus("open");
       socket.onmessage = (event) => {
         const raceState = JSON.parse(event.data) as RaceState;
         dispatch(raceStateReceived(raceState));
+        backfillMonologues(raceState);
       };
       socket.onclose = () => {
         if (cancelled) return;
