@@ -1,7 +1,7 @@
 # ADR-0015: Per-tick brain-call cadence, with book-found surfaced via `Observation.event`
 
 **Date**: 2026-09-24
-**Status**: accepted
+**Status**: accepted (tick size 0.25 superseded by ADR-0020; per-tick cadence unchanged)
 **Deciders**: Daria
 
 ## Context

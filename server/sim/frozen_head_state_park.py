@@ -49,8 +49,9 @@ def step_weather(weather: str, rng: random.Random) -> str:
     """Weighted transition, biased toward staying the same condition — weather should read
     as a discrete event ('it's pouring') that then holds, not per-tick flicker.
 
-    Weights are per-call, not scaled by dt_min — relies on the loop always ticking
-    1 sim-minute at a time (CLAUDE.md). If dt_min ever varies, this needs rescaling.
+    Weights are per-call, not scaled by dt_min — so weather changes are per-tick, and a
+    change to TICK_DT_MIN changes how long (in sim-time) a condition holds. Fine while the
+    tick size is fixed; if dt_min ever varies per tick, this needs rescaling.
     """
     weights = TRANSITION_WEIGHTS[weather]
     return rng.choices(list(weights), weights=list(weights.values()), k=1)[0]

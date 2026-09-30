@@ -34,14 +34,14 @@ OnUpdate = Callable[[RaceState], Awaitable[None]]
 # Every tick spawns a brain call, deliberately not gated by trigger events (ADR-0015) — trigger
 # moments like book-found are surfaced via Observation.event instead of call scheduling. Real
 # wall-clock time between ticks is TICK_DT_MIN * 60s (at speed=1).
-TICK_DT_MIN = 0.25
+TICK_DT_MIN = 0.5
 
 # Fault-tolerance constants (see docs/adr for the phase that introduced these). Checkpoints
 # normally only happen on a successful brain decision (ADR-0008) — this bounds how much
 # sim-time a crash during an extended brain-call outage could lose.
 FALLBACK_CHECKPOINT_INTERVAL_MIN = 5.0
 # How often (in ticks) run() prunes already-finished think() tasks out of its bookkeeping
-# list — without this, a full 60h race holds ~14,400 Task objects in memory until the final
+# list — without this, a full 60h race holds ~7,200 Task objects in memory until the final
 # gather, none of which need to be kept once done (think() swallows its own exceptions).
 TASK_PRUNE_INTERVAL_TICKS = 100
 

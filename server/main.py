@@ -73,7 +73,7 @@ _ws_clients: set[WebSocket] = set()
 _run_task: asyncio.Task | None = None
 # Last RaceState broadcast, replayed to a client the instant it connects — otherwise a
 # newly-opened tab sees an empty store (frontend renders IdleState) until the next tick's
-# broadcast fires, which at speed=1 can be up to 15s away.
+# broadcast fires, which at speed=1 can be up to 30s away.
 _latest_race_state: RaceState | None = None
 
 

@@ -25,7 +25,11 @@ TRANSITION_WEIGHTS = {
 RESAMPLE_INTERVAL_KM = 0.05
 
 N_BOOKS = 13  # matches the real Barkley's book count
-BOOK_PROXIMITY_KM = 0.05  # how close you need to walk to a book to find it
+# How close you need to walk to a book to find it. Only the end-of-tick position is checked, so
+# this is sized against the max step per tick (0.1km at the 5 min/km pace floor with
+# TICK_DT_MIN=0.5, ADR-0020): 0.075 keeps a straight pass from slipping through, while staying
+# far below the ~2.3km book spacing (ADR-0015).
+BOOK_PROXIMITY_KM = 0.075
 TRAIL_PROXIMITY_KM = 0.1  # beyond this from the nearest trail point, you're "off trail"
 LOOP_COMPLETE_RADIUS_KM = 0.1
 # must have covered at least half the loop to "complete" it
@@ -57,24 +61,27 @@ OFF_TRAIL_TERRAIN = "thick brush, no trail in sight"
 
 # Special events (comedic, non-book): rolled once per tick, after book-finding (which takes
 # priority — see sim/course.py's detect_special_event and models.EventType). Terrain/grade-gated
-# ones only get an rng roll on qualifying ground; kept deliberately rare at TICK_DT_MIN=0.25 so
-# these read as occasional color, not a running commentary track.
+# ones only get an rng roll on qualifying ground; kept deliberately rare so these read as
+# occasional color, not a running commentary track. Per-tick chances below (and
+# HALLUCINATION_MAX_CHANCE_PER_TICK) were doubled when TICK_DT_MIN went 0.25 -> 0.5 (ADR-0020)
+# so the per-sim-hour rate is unchanged — they are NOT scaled by dt at the roll site, so
+# changing TICK_DT_MIN again means re-scaling these.
 TRIP_TERRAIN = frozenset(
     {"steep scree", "muddy switchbacks", "rocky ridge line", OFF_TRAIL_TERRAIN}
 )
 # abs(grade) beyond this also counts as trip-prone
 TRIP_GRADE_PCT_THRESHOLD = 12.0
-TRIP_CHANCE_PER_TICK = 0.02
+TRIP_CHANCE_PER_TICK = 0.04
 
 PUDDLE_TERRAIN = frozenset({"creek crossing", "muddy switchbacks"})
-PUDDLE_CHANCE_PER_TICK = 0.03
+PUDDLE_CHANCE_PER_TICK = 0.06
 
 BRIAR_TERRAIN = frozenset({"thick briars"})
-BRIAR_CHANCE_PER_TICK = 0.04
+BRIAR_CHANCE_PER_TICK = 0.08
 
-WILDLIFE_CHANCE_PER_TICK = 0.006  # night only, any terrain
+WILDLIFE_CHANCE_PER_TICK = 0.012  # night only, any terrain
 
-BOTTLE_DROP_CHANCE_PER_TICK = 0.002  # ungated — any terrain, any time
+BOTTLE_DROP_CHANCE_PER_TICK = 0.004  # ungated — any terrain, any time
 
 # Sleep-debt hallucinations (ADR-0001/ADR-0008/ADR-0017): gated by elapsed_min alone (no
 # separate sleep_debt field — same fatigue-proxy reasoning as NOISE_FATIGUE_PER_HOUR_KM above).
@@ -86,5 +93,5 @@ BOTTLE_DROP_CHANCE_PER_TICK = 0.002  # ungated — any terrain, any time
 # flip to the commented-out "real" values once running full-length races.
 HALLUCINATION_ONSET_MIN = 60.0  # real target: 40 * 60 = 2400.0
 HALLUCINATION_RAMP_MIN = 240.0  # real target: 55 * 60 = 3300.0
-HALLUCINATION_MAX_CHANCE_PER_TICK = 0.02
+HALLUCINATION_MAX_CHANCE_PER_TICK = 0.04
 JUMBLE_MAX_SEVERITY = 0.6  # cap so a jumbled segment stays legible-if-unreliable, not pure noise

@@ -109,3 +109,16 @@ def test_decide_returns_decision_and_no_failure_reason_on_success(monkeypatch):
 
     assert outcome.decision == valid
     assert outcome.failure_reason is None
+
+
+def test_build_prompt_puts_cache_breakpoint_on_summary_only():
+    p = Participant(_persona())
+    with_summary = p.build_prompt(_obs(), [], summary_body="Loop 1: found no books.")
+    summary_block = with_summary[0]["content"][0]
+    assert summary_block["cache_control"] == {"type": "ephemeral"}
+    assert "Loop 1: found no books." in summary_block["text"]
+    # the current observation is volatile, so it must never carry a breakpoint
+    assert isinstance(with_summary[-1]["content"], str)
+
+    without_summary = p.build_prompt(_obs(), [])
+    assert all(isinstance(m["content"], str) for m in without_summary)

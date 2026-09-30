@@ -18,11 +18,11 @@ SLIDING_WINDOW_N = 20
 
 # How many newly-aged-out turns get folded into ONE summary segment at a time. Independent of
 # SLIDING_WINDOW_N on purpose: N is "how much recent detail the LLM sees verbatim", this is
-# "how coarse the compacted history gets" — a long race (60h/14,400 ticks) needs this decoupled
+# "how coarse the compacted history gets" — a long race (60h/7,200 ticks) needs this decoupled
 # from N or the summary grows by one line per tick for the entire race (see memory_example.md
 # at the repo root for what that looked like before this was added). Turns that have aged out
 # of the window but haven't yet reached a full batch are simply not in the prompt yet — a
-# bounded blind spot of at most BATCH_SIZE-1 turns (a few sim-minutes at TICK_DT_MIN=0.25),
+# bounded blind spot of at most BATCH_SIZE-1 turns (a few sim-minutes at TICK_DT_MIN=0.5),
 # negligible against a 60h race.
 COMPACT_BATCH_SIZE = 20
 

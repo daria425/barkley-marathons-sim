@@ -90,7 +90,21 @@ class Participant:
                 if summary_body and latest_highlight
                 else summary_body or latest_highlight
             )
-            messages.append({"role": "user", "content": f"Summary of the race so far:\n{combined}"})
+            # cache_control on the summary makes system + summary a cached prefix: both are
+            # byte-identical between folds (every COMPACT_BATCH_SIZE ticks), while the window
+            # after it slides every tick and can't be cached (ADR-0020).
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Summary of the race so far:\n{combined}",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            )
         messages += turns_to_messages(history)
         messages.append({"role": "user", "content": format_observation(obs)})
         return messages
