@@ -35,9 +35,32 @@ export interface paths {
          * @description Kicks off the sim loop as a background task and returns immediately — the sim never
          *     waits for callers any more than it waits for the LLM. Only one run at a time in v1
          *     (single-runner, no race-end concept yet, per CLAUDE.md). duration_min defaults to the full
-         *     60h race; pass a smaller value for a bounded live canary.
+         *     60h race; pass a smaller value for a bounded live canary. Requires the X-Admin-Token
+         *     header (see require_admin_token) — this is the one endpoint that costs real money and
+         *     starts a race other people can watch, so it isn't left open to anyone who finds the URL.
          */
         post: operations["run_ultra_sim_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Status
+         * @description Liveness for an unattended multi-hour run — is the sim task alive, when did it last
+         *     tick, and has the crash-restart supervisor (_supervised_run) had to kick in.
+         */
+        get: operations["status_status_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -229,6 +252,12 @@ export interface components {
             last_event?: ("found_book" | "tripped_and_fell" | "stepped_in_puddle" | "briar_scratch" | "spooked_by_wildlife" | "dropped_water_bottle") | null;
             /** Last Hallucination */
             last_hallucination?: string | null;
+            /**
+             * Status
+             * @default running
+             * @enum {string}
+             */
+            status: "running" | "finished" | "dnf_cutoff" | "dnf_quit";
         };
         /** ValidationError */
         ValidationError: {
@@ -278,7 +307,9 @@ export interface operations {
                 speed?: number;
                 duration_min?: number;
             };
-            header?: never;
+            header?: {
+                "x-admin-token"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -300,6 +331,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

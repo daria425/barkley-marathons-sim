@@ -3,11 +3,12 @@ import type { RefObject } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Group, MathUtils } from "three";
 import type { SceneMotion } from "./motion";
+import type { EndStatus } from "@/lib/raceOutcome";
 
 const SKIN = "#d9a176";
 const SHIRT = "#ec9b37";
 
-function Limb({ leg = false }: { leg?: boolean }) {
+function Limb({ leg = false, bend, watch = false }: { leg?: boolean; bend?: number; watch?: boolean }) {
   return (
     <>
       <mesh position={[0, -0.22, 0]} castShadow>
@@ -15,7 +16,7 @@ function Limb({ leg = false }: { leg?: boolean }) {
         <meshStandardMaterial color={leg ? "#303e3b" : SHIRT} roughness={0.9} />
       </mesh>
       {/* Forward is -Z: elbows bend forward (+X), knees bend back (-X). */}
-      <group position={[0, -0.43, 0]} rotation={[leg ? -0.3 : 1.05, 0, 0]}>
+      <group position={[0, -0.43, 0]} rotation={[bend ?? (leg ? -0.3 : 1.05), 0, 0]}>
         <mesh position={[0, -0.19, 0]} castShadow>
           <capsuleGeometry args={[leg ? 0.085 : 0.065, 0.27, 4, 8]} />
           <meshStandardMaterial color={SKIN} roughness={0.85} />
@@ -24,12 +25,13 @@ function Limb({ leg = false }: { leg?: boolean }) {
           <sphereGeometry args={[1, 10, 8]} />
           <meshStandardMaterial color={leg ? "#f1e7c9" : SKIN} roughness={0.8} />
         </mesh>
+        {watch && <mesh position={[0, -0.31, -0.055]}><boxGeometry args={[0.14, 0.12, 0.055]} /><meshStandardMaterial color="#203d3d" emissive="#80d4be" emissiveIntensity={0.25} /></mesh>}
       </group>
     </>
   );
 }
 
-export function TrailRunner({ motion }: { motion: RefObject<SceneMotion> }) {
+export function TrailRunner({ motion, outcome }: { motion: RefObject<SceneMotion>; outcome?: EndStatus }) {
   const body = useRef<Group>(null);
   const leftLeg = useRef<Group>(null);
   const rightLeg = useRef<Group>(null);
@@ -38,6 +40,20 @@ export function TrailRunner({ motion }: { motion: RefObject<SceneMotion> }) {
   useFrame(() => {
     const { phase, speed, time } = motion.current;
     const amplitude = MathUtils.clamp(speed / 1.5, 0, 1);
+    if (outcome) {
+      const seated = outcome === "dnf_quit";
+      const won = outcome === "finished";
+      if (body.current) {
+        body.current.position.y = seated ? -0.28 : 0.03;
+        body.current.rotation.set(won ? -0.04 : seated ? -0.14 : -0.08, 0, won ? Math.sin(time * 1.4) * 0.018 : 0);
+        body.current.scale.y = 1 + Math.sin(time * 2) * 0.004;
+      }
+      if (leftLeg.current) leftLeg.current.rotation.x = seated ? 1.35 : 0;
+      if (rightLeg.current) rightLeg.current.rotation.x = seated ? 1.35 : 0;
+      if (leftArm.current) leftArm.current.rotation.set(won ? 0 : seated ? 0.65 : 1.05, 0, won ? -2.55 : -0.16);
+      if (rightArm.current) rightArm.current.rotation.set(won ? 0 : seated ? 0.65 : 0.25, 0, won ? 2.55 : 0.16);
+      return;
+    }
     if (body.current) {
       body.current.position.y = 0.03 + Math.abs(Math.sin(phase)) * 0.075 * amplitude;
       body.current.rotation.z = Math.sin(phase) * 0.045 * amplitude;
@@ -48,17 +64,22 @@ export function TrailRunner({ motion }: { motion: RefObject<SceneMotion> }) {
     if (rightLeg.current) rightLeg.current.rotation.x = -Math.sin(phase) * 0.7 * amplitude;
     if (leftArm.current) leftArm.current.rotation.x = -Math.sin(phase) * 0.65 * amplitude;
     if (rightArm.current) rightArm.current.rotation.x = Math.sin(phase) * 0.65 * amplitude;
+    if (leftArm.current) leftArm.current.rotation.z = -0.12;
+    if (rightArm.current) rightArm.current.rotation.z = 0.12;
   });
 
   return (
+    <group rotation={[0, outcome ? Math.PI - 0.3 : 0, 0]}>
     <group ref={body}>
-      <group position={[-0.16, 0.92, 0]} ref={leftLeg}><Limb leg /></group>
-      <group position={[0.16, 0.92, 0]} ref={rightLeg}><Limb leg /></group>
+      <group position={[-0.16, 0.92, 0]} ref={leftLeg}><Limb leg bend={outcome === "dnf_quit" ? -1.5 : undefined} /></group>
+      <group position={[0.16, 0.92, 0]} ref={rightLeg}><Limb leg bend={outcome === "dnf_quit" ? -1.5 : undefined} /></group>
       <mesh position={[0, 1.3, 0]} scale={[0.35, 0.46, 0.23]} castShadow>
         <sphereGeometry args={[1, 12, 10]} /><meshStandardMaterial color={SHIRT} roughness={0.9} />
       </mesh>
-      <group position={[-0.34, 1.55, 0]} ref={leftArm} rotation={[0, 0, -0.12]}><Limb /></group>
-      <group position={[0.34, 1.55, 0]} ref={rightArm} rotation={[0, 0, 0.12]}><Limb /></group>
+      <group position={[-0.34, 1.55, 0]} ref={leftArm} rotation={[0, 0, -0.12]}><Limb bend={outcome === "finished" ? 0.2 : outcome === "dnf_quit" ? 0.4 : undefined} watch={Boolean(outcome)} /></group>
+      <group position={[0.34, 1.55, 0]} ref={rightArm} rotation={[0, 0, 0.12]}><Limb bend={outcome === "finished" ? 0.2 : outcome === "dnf_quit" ? 0.4 : undefined} /></group>
+      <group position={[0, 1.8, 0]} rotation={[outcome === "dnf_quit" ? -0.4 : outcome === "dnf_cutoff" ? -0.22 : 0, 0, 0]}>
+      <group position={[0, -1.8, 0]}>
       <mesh position={[0, 2.03, 0]} scale={[0.43, 0.46, 0.41]} castShadow>
         <sphereGeometry args={[1, 20, 16]} /><meshStandardMaterial color={SKIN} roughness={0.8} />
       </mesh>
@@ -69,6 +90,9 @@ export function TrailRunner({ motion }: { motion: RefObject<SceneMotion> }) {
       <mesh position={[0, 2.26, -0.37]} scale={[0.4, 0.035, 0.31]} castShadow>
         <sphereGeometry args={[1, 12, 8]} /><meshStandardMaterial color="#c75b38" roughness={0.9} />
       </mesh>
+      {outcome && [-1, 1].map((side) => <mesh key={side} position={[side * 0.14, 2.04, -0.385]} scale={[0.027, 0.035, 0.015]}><sphereGeometry args={[1, 8, 6]} /><meshStandardMaterial color="#34372d" /></mesh>)}
+      </group>
+      </group>
       <mesh position={[0, 1.38, 0.23]} scale={[0.255, 0.33, 0.14]} castShadow>
         <sphereGeometry args={[1, 10, 8]} /><meshStandardMaterial color="#286569" roughness={0.95} />
       </mesh>
@@ -80,6 +104,7 @@ export function TrailRunner({ motion }: { motion: RefObject<SceneMotion> }) {
           <capsuleGeometry args={[0.055, 0.2, 4, 8]} /><meshStandardMaterial color="#c6d6c7" roughness={0.8} />
         </mesh>
       ))}
+    </group>
     </group>
   );
 }

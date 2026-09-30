@@ -11,6 +11,7 @@
   },
   "runners": {
     "Hank": {
+      "status": "running",
       "persona_name": "Hank",
       "bib_number": 7,
       "physiology": {

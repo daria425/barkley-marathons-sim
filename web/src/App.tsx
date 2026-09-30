@@ -38,7 +38,7 @@ function App() {
           {runner ? (
             <>
               <WatchFace runner={runner} />
-              <MonologueFeed personaName={runner.persona_name} />
+              <MonologueFeed personaName={runner.persona_name} runner={runner} />
             </>
           ) : (
             <IdleState />
