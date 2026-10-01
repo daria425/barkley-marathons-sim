@@ -469,17 +469,23 @@ def _build_observation(
     )
 
 
-def _check_race_end(state: LoopState, decision: Decision) -> RunnerStatus | None:
+def _check_race_end(
+    state: LoopState, decision: Decision, killed: bool = False
+) -> RunnerStatus | None:
     """ADR-0019: race-end detection for the tick just executed, checked in priority order —
     finishing loop TOTAL_LOOPS beats a quit decision landing the same tick. Returns None while
     still running. Reads state.loop/decision.quit directly rather than taking a StateSnapshot,
     since both are already known right after advance_tick() without needing the rest of the
-    snapshot built."""
+    snapshot built.
+
+    `killed` is the operator kill switch (ADR-0022): the run is cut short and announced as an
+    ordinary dnf_cutoff. A real finish or quit on the same tick still wins, since those are
+    what actually happened."""
     if state.loop > TOTAL_LOOPS:
         return "finished"
     if decision.quit:
         return "dnf_quit"
-    return None
+    return "dnf_cutoff" if killed else None
 
 
 async def _finalize_race_end(
@@ -588,10 +594,37 @@ async def _resume_or_start(
     return state, False
 
 
+def is_stop_requested(stop_event: asyncio.Event | None) -> bool:
+    return stop_event is not None and stop_event.is_set()
+
+
+async def sleep_unless_stopped(stop_event: asyncio.Event | None, seconds: float) -> None:
+    """asyncio.sleep that returns early once stop_event is set, so the kill switch takes effect
+    within the current tick instead of up to a whole tick (30s at 1x) later."""
+    if stop_event is None:
+        await asyncio.sleep(seconds)
+        return
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=seconds)
+    except TimeoutError:
+        pass
+
+
+async def _drain_tasks(tasks: list[asyncio.Task], cancel: bool) -> None:
+    """Waits out the in-flight think() tasks. With cancel=True (kill switch) they're cancelled
+    first so no further LLM calls are paid for — return_exceptions swallows the resulting
+    CancelledErrors, same as it does for any stray task exception."""
+    if cancel:
+        for task in tasks:
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def run(
     speed: float = 1.0,
     duration_min: float = FULL_RACE_MINUTES,
     on_update: OnUpdate | None = None,
+    stop_event: asyncio.Event | None = None,
 ) -> None:
     """speed=1.0 is real Barkley pacing (CLAUDE.md: "the eventual real way to run this is at
     1x realtime... 60x/600x speed is for iterating during development, not the intended
@@ -604,7 +637,11 @@ async def run(
 
     on_update, when given, is awaited once per tick with the current RaceState (main.py wires
     this to its WS broadcaster) and again whenever a brain call lands mid-tick (see think()).
-    Default None keeps the CLI/smoke-test/test_resume.py path unaffected."""
+    Default None keeps the CLI/smoke-test/test_resume.py path unaffected.
+
+    stop_event is the operator kill switch (main.py's POST /stop, ADR-0022): once set, the very
+    next tick ends the race as an ordinary dnf_cutoff — final checkpoint, terminal broadcast,
+    pending brain calls cancelled — so a stopped run can't be resumed and keep spending."""
     conn = await db.init_db(DB_PATH)
     runner = RunnerLoop(Participant(load_persona(PERSONA_PATH)), conn, asyncio.Semaphore(5))
 
@@ -646,7 +683,7 @@ async def run(
                 obs.pace_min_per_km,
                 obs.feel,
             )
-            terminal_status = _check_race_end(state, decision)
+            terminal_status = _check_race_end(state, decision, is_stop_requested(stop_event))
             if terminal_status is not None:
                 runner.status = terminal_status
                 await _finalize_race_end(runner, obs, snapshot, decision, conn, on_update)
@@ -658,7 +695,7 @@ async def run(
             tasks.append(asyncio.create_task(think(runner, obs, snapshot, on_update)))
             if len(tasks) % TASK_PRUNE_INTERVAL_TICKS == 0:
                 tasks = [t for t in tasks if not t.done()]
-            await asyncio.sleep(TICK_DT_MIN * 60 / speed)
+            await sleep_unless_stopped(stop_event, TICK_DT_MIN * 60 / speed)
         else:
             # for/else: the loop ran all n_ticks without break — duration_min is the actual
             # race cutoff (not just a dev-convenience early stop), so exhausting it is a real
@@ -685,7 +722,7 @@ async def run(
         # return_exceptions=True: think() already swallows its own exceptions (CLAUDE.md's
         # "no retries, keep the old decision" contract), so nothing here should ever raise —
         # but a crashed tick loop shouldn't let a stray task exception mask the real error.
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await _drain_tasks(tasks, cancel=is_stop_requested(stop_event))
         await conn.close()
 
 

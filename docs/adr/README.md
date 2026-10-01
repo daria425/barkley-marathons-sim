@@ -23,3 +23,4 @@
 | [0019](0019-race-end-mechanism.md) | Race-end mechanism — finished / dnf_cutoff / dnf_quit | accepted | 2026-09-29 |
 | [0020](0020-30s-tick-and-summary-prompt-caching.md) | 30-second ticks (`TICK_DT_MIN = 0.5`) and prompt caching on the summary | accepted | 2026-09-30 |
 | [0021](0021-monologue-history-endpoint-and-bounded-feed.md) | Monologue history endpoint and a bounded feed | accepted | 2026-09-30 |
+| [0022](0022-operator-kill-switch-as-dnf-cutoff.md) | Operator kill switch — `POST /stop` ends the run as a plain `dnf_cutoff` | accepted | 2026-10-01 |

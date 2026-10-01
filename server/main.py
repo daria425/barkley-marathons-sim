@@ -43,13 +43,15 @@ from models import (  # noqa: E402
     RaceState,
 )
 from sim import course as course_mod  # noqa: E402
-from sim.loop import DB_PATH, FULL_RACE_MINUTES, run  # noqa: E402
+from sim.loop import DB_PATH, FULL_RACE_MINUTES, run, sleep_unless_stopped  # noqa: E402
 
 # How many consecutive run() crashes with zero sim-time progress the supervisor tolerates
 # before giving up — a transient hiccup (DB lock, a one-off bad state) gets retried, a
 # persistent bug (crashes before a single tick completes) doesn't spin forever.
 MAX_CONSECUTIVE_FAILURES = 5
 RESTART_BACKOFF_SEC = 5
+# How long POST /stop waits for the run to wind down gracefully before hard-cancelling the task.
+STOP_GRACE_SEC = 10
 
 # The one costly, state-changing endpoint (POST /run kicks off a 60h race, real Anthropic
 # spend) is gated behind a single shared secret, not real auth — there's one operator (you),
@@ -89,6 +91,8 @@ app.add_middleware(
 
 _ws_clients: set[WebSocket] = set()
 _run_task: asyncio.Task | None = None
+# Set by POST /stop (the operator kill switch, ADR-0022); one per run, created in POST /run.
+_stop_event: asyncio.Event | None = None
 # Last RaceState broadcast, replayed to a client the instant it connects — otherwise a
 # newly-opened tab sees an empty store (frontend renders IdleState) until the next tick's
 # broadcast fires, which at speed=1 can be up to 30s away.
@@ -114,7 +118,7 @@ async def _broadcast(race_state: RaceState) -> None:
             _ws_clients.discard(ws)
 
 
-async def _supervised_run(speed: float, duration_min: float) -> None:
+async def _supervised_run(speed: float, duration_min: float, stop_event: asyncio.Event) -> None:
     """Wraps sim.loop.run() with crash-restart. run()'s own crash boundary (sim/loop.py)
     checkpoints best-effort before re-raising, and db.load_checkpoint (ADR-0008) means a fresh
     run() call resumes right where the last one left off — so on a crash, this just calls
@@ -128,7 +132,12 @@ async def _supervised_run(speed: float, duration_min: float) -> None:
         while remaining > 0:
             start_elapsed = _health["last_tick_elapsed_min"] or 0.0
             try:
-                await run(speed=speed, duration_min=remaining, on_update=_broadcast)
+                await run(
+                    speed=speed,
+                    duration_min=remaining,
+                    on_update=_broadcast,
+                    stop_event=stop_event,
+                )
                 return
             except Exception as e:
                 last_elapsed = _health["last_tick_elapsed_min"] or start_elapsed
@@ -151,7 +160,9 @@ async def _supervised_run(speed: float, duration_min: float) -> None:
                         MAX_CONSECUTIVE_FAILURES,
                     )
                     return
-                await asyncio.sleep(RESTART_BACKOFF_SEC)
+                # interruptible: a /stop during the backoff makes the retried run() end the race
+                # on its first tick instead of waiting this out and carrying on
+                await sleep_unless_stopped(stop_event, RESTART_BACKOFF_SEC)
     finally:
         _health["alive"] = False
 
@@ -165,15 +176,50 @@ def health_check():
 async def run_ultra_sim(speed: float = 1.0, duration_min: float = FULL_RACE_MINUTES):
     """Kicks off the sim loop as a background task and returns immediately — the sim never
     waits for callers any more than it waits for the LLM. Only one run at a time in v1
-    (single-runner, no race-end concept yet, per CLAUDE.md). duration_min defaults to the full
-    60h race; pass a smaller value for a bounded live canary. Requires the X-Admin-Token
-    header (see require_admin_token) — this is the one endpoint that costs real money and
-    starts a race other people can watch, so it isn't left open to anyone who finds the URL."""
-    global _run_task
+    (single-runner, CLAUDE.md). duration_min is the race cutoff (ADR-0019) and defaults to the
+    full 60h; pass a smaller value for a bounded live canary. POST /stop ends a run early.
+    Requires the X-Admin-Token header (see require_admin_token) — this is the one endpoint that
+    costs real money and starts a race other people can watch, so it isn't left open to anyone
+    who finds the URL."""
+    global _run_task, _stop_event
     if _run_task is not None and not _run_task.done():
         return {"status": "already running"}
-    _run_task = asyncio.create_task(_supervised_run(speed=speed, duration_min=duration_min))
+    _stop_event = asyncio.Event()
+    _run_task = asyncio.create_task(
+        _supervised_run(speed=speed, duration_min=duration_min, stop_event=_stop_event)
+    )
     return {"status": "started", "speed": speed, "duration_min": duration_min}
+
+
+@app.post("/stop", dependencies=[Depends(require_admin_token)])
+async def stop_run():
+    """Operator kill switch (ADR-0022): ends the running race now so a run that has gone wrong
+    stops spending. Admin-token gated like /run.
+
+    Deliberately NOT visible to viewers: the race is wound down through the ordinary dnf_cutoff
+    path, so the final checkpoint and the terminal WS broadcast just say the runner ran out of
+    time, and /status looks like any finished run. The only trace is the warning below in the
+    server log and this response, which only the token holder sees.
+
+    Graceful first (stop event: next tick finalizes, pending brain calls are cancelled); if the
+    run hasn't wound down within STOP_GRACE_SEC the task is hard-cancelled — that fallback skips
+    the clean terminal announcement (the checkpoint keeps its last 'running' state)."""
+    task = _run_task
+    if task is None or task.done() or _stop_event is None:
+        return {"status": "not running"}
+    logger.warning(
+        "[kill switch] POST /stop at sim-minute %s — ending the run as dnf_cutoff",
+        _health["last_tick_elapsed_min"],
+    )
+    _stop_event.set()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=STOP_GRACE_SEC)
+    except TimeoutError:
+        logger.warning("[kill switch] graceful stop timed out — hard-cancelling the run task")
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return {"status": "force-cancelled"}
+    return {"status": "stopped"}
 
 
 @app.get("/status")
