@@ -273,6 +273,20 @@ async def monologue_history(
     )
 
 
+@app.get("/admin/health", dependencies=[Depends(require_admin_token)], include_in_schema=False)
+async def admin_health():
+    """Run health for the hourly monitor (scripts/monitor_race.py, ADR-0023): brain-call failure
+    counts, newest-turn staleness, checkpoint status. Admin-token gated (failure reasons can
+    carry API error text) and left out of the OpenAPI schema — it isn't part of the frontend
+    contract. Read-only connection, like /monologues; before any run exists it reports no race."""
+    try:
+        async with aiosqlite.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            await conn.execute("PRAGMA busy_timeout=5000")
+            return await db.get_health_summary(conn)
+    except sqlite3.OperationalError:
+        return {"race_status": None}
+
+
 _SCHEMA_MODELS = {"race-state": RaceState}
 
 

@@ -164,6 +164,54 @@ async def get_monologues_page(
     return [(i, elapsed, text) for i, elapsed, text in reversed(rows[:limit]) if text], has_more
 
 
+async def get_health_summary(conn: aiosqlite.Connection) -> dict:
+    """Aggregate run health for the hourly monitor (scripts/monitor_race.py, GET /admin/health):
+    brain-call failure counts, how stale the newest logged turn is, and the checkpoint's race
+    status. Read-only and cheap — a few aggregates over `turns` plus one tail scan — and a
+    failed brain call is the thing that never crashes the sim (it just keeps the old decision),
+    so this is the only place a quiet outage (dead API key, no credit) shows up in numbers."""
+    cursor = await conn.execute(
+        "SELECT count(*), "
+        "coalesce(sum(decision_json IS NULL), 0), "
+        "coalesce(sum(created_at >= datetime('now', '-1 hour')), 0), "
+        "coalesce(sum(decision_json IS NULL AND created_at >= datetime('now', '-1 hour')), 0), "
+        "cast(strftime('%s', 'now') - strftime('%s', max(created_at)) AS INTEGER), "
+        "max(elapsed_min) FROM turns"
+    )
+    total, failures, turns_hour, failures_hour, age_sec, elapsed = await cursor.fetchone()
+
+    cursor = await conn.execute("SELECT decision_json IS NULL FROM turns ORDER BY id DESC LIMIT 50")
+    consecutive = 0
+    for (failed,) in await cursor.fetchall():
+        if not failed:
+            break
+        consecutive += 1
+
+    cursor = await conn.execute(
+        "SELECT substr(failure_reason, 1, 120), count(*) FROM turns "
+        "WHERE decision_json IS NULL AND created_at >= datetime('now', '-1 hour') "
+        "GROUP BY 1 ORDER BY 2 DESC LIMIT 3"
+    )
+    reasons = [{"reason": r or "unknown", "count": n} for r, n in await cursor.fetchall()]
+
+    cursor = await conn.execute(
+        "SELECT coalesce(json_extract(checkpoint_json, '$.status'), 'running') "
+        "FROM checkpoints ORDER BY updated_at DESC LIMIT 1"
+    )
+    row = await cursor.fetchone()
+    return {
+        "race_status": row[0] if row else None,
+        "race_elapsed_min": elapsed,
+        "turns_total": total,
+        "failures_total": failures,
+        "turns_last_hour": turns_hour,
+        "failures_last_hour": failures_hour,
+        "consecutive_failures": consecutive,
+        "latest_turn_age_sec": age_sec,
+        "recent_failure_reasons": reasons,
+    }
+
+
 async def get_all_turns(
     conn: aiosqlite.Connection, runner_id: str
 ) -> list[tuple[Observation, Decision]]:

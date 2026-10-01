@@ -1,0 +1,28 @@
+# Hourly health check of the live race (ADR-0023). A failing run = a problem needs a human, and
+# GitHub emails the repo owner about failed scheduled workflows. Alert only; never calls /stop.
+name: race-monitor
+
+on:
+  schedule:
+    - cron: "7 * * * *" # hourly; GitHub may delay scheduled runs by several minutes
+  workflow_dispatch: {} # run by hand from the Actions tab
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m scripts.monitor_race # stdlib only — no dependency install
+        env:
+          API_BASE: https://barkley-marathons-simulator.fly.dev
+          RACE_ADMIN_TOKEN: ${{ secrets.RACE_ADMIN_TOKEN }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
