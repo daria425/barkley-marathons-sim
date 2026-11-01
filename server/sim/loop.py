@@ -6,7 +6,6 @@ everything else (physiology, weather, memory, logging) already was.
 import asyncio
 import logging
 import os
-import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +19,16 @@ from agents.participant import Participant
 from agents.personas import load_persona
 from models import Checkpoint, Decision, Observation, RaceState, RunnerState, RunnerStatus
 from sim import course as course_mod
-from sim import frozen_head_state_park, hallucinations, physiology
+from sim import frozen_head_state_park, physiology
+from sim.race_config import (
+    RaceConfig,
+    config_hash,
+    events_due,
+    gps_rng,
+    hallucination_due,
+    load_race_config,
+    weather_at,
+)
 from sim.sim_constants import TOTAL_LOOPS
 from sim.sim_utils import format_clock_time
 
@@ -104,8 +112,9 @@ class RunnerLoop:
 class StateSnapshot:
     """Everything a Checkpoint (ADR-0008) needs beyond the Observation/Decision pair, captured
     at the same tick as the Observation it accompanies — same late-binding reasoning as obs
-    itself (see think()'s docstring): the loop's physio/park/rng keep advancing on every tick,
-    so this must be passed as an argument, not read live inside the async think() task."""
+    itself (see think()'s docstring): the loop's physio/park/pending events keep advancing on
+    every tick, so this must be passed as an argument, not read live inside the async think()
+    task."""
 
     physio: physiology.PhysiologyState
     park: frozen_head_state_park.FrozenHeadStatePark
@@ -115,8 +124,16 @@ class StateSnapshot:
     loop: int
     books_collected: frozenset[int]
     dist_since_loop_start_km: float
-    last_ate_min_ago: float
-    rng_state: str
+    last_ate_min_ago: float | None
+    last_drank_min_ago: float | None
+    race_config: RaceConfig
+    pending_events: tuple[str, ...]
+
+
+class RaceConfigMismatch(Exception):
+    """A checkpoint was written under a different race config (name or contents) than the one
+    this run was started with. Resuming would splice two sets of conditions into one race, so
+    it's refused outright (ADR-0024) — main.py's supervisor doesn't retry it either."""
 
 
 class LoopState:
@@ -131,58 +148,91 @@ class LoopState:
         self,
         physio: physiology.PhysiologyState,
         park: frozen_head_state_park.FrozenHeadStatePark,
-        start_hour: float,
+        race_config: RaceConfig,
         true_pos: tuple[float, float],
         believed_pos: tuple[float, float],
-        last_ate_min_ago: float,
-        rng: random.Random,
+        last_ate_min_ago: float | None = None,
+        last_drank_min_ago: float | None = None,
         loop: int = 1,
         books_collected: frozenset[int] = frozenset(),
         dist_since_loop_start_km: float = 0.0,
+        pending_events: tuple[str, ...] = (),
     ):
         self.physio = physio
         self.park = park
-        self.start_hour = start_hour
+        self.race_config = race_config
+        self.start_hour = race_config.start_hour
         self.true_pos = true_pos
         self.believed_pos = believed_pos
+        # None until the runner first eats/drinks (Observation.last_ate_min_ago)
         self.last_ate_min_ago = last_ate_min_ago
-        self.rng = rng
+        self.last_drank_min_ago = last_drank_min_ago
         self.loop = loop
         self.books_collected = books_collected
         self.dist_since_loop_start_km = dist_since_loop_start_km
+        # scheduled events waiting out a found_book tick, oldest first (ADR-0024)
+        self.pending_events = pending_events
 
 
-def build_initial_state(rng: random.Random, start_hour: float) -> LoopState:
+def build_initial_state(race_config: RaceConfig) -> LoopState:
     """Fresh-start LoopState — no checkpoint exists yet for this runner."""
     physio = physiology.initial_state()
-    park = frozen_head_state_park.initial_state(start_hour=start_hour, rng=rng)
+    park = frozen_head_state_park.initial_state(
+        race_config.start_hour, weather_at(race_config, 0.0)
+    )
     start_pos = course_mod.start_coords(course_mod.load_course())
     return LoopState(
         physio=physio,
         park=park,
-        start_hour=start_hour,
+        race_config=race_config,
         true_pos=start_pos,
         believed_pos=start_pos,
-        last_ate_min_ago=0.0,
-        rng=rng,
     )
 
 
-def restore_state(checkpoint: Checkpoint) -> LoopState:
-    """ADR-0008's resume path: reconstruct a LoopState bit-exactly from a checkpoint, including
-    rng — see db.rng_from_state's docstring for why a bare json round-trip isn't enough."""
+def restore_state(checkpoint: Checkpoint, race_config: RaceConfig) -> LoopState:
+    """ADR-0008's resume path: reconstruct a LoopState bit-exactly from a checkpoint. No rng to
+    restore (ADR-0024) — the race config rebuilds every schedule and the GPS noise — which is
+    why it has to be the very config the checkpoint was written under."""
+    if (checkpoint.race_config_name, checkpoint.race_config_hash) != (
+        race_config.name,
+        config_hash(race_config),
+    ):
+        raise RaceConfigMismatch(
+            f"checkpoint for {checkpoint.runner_id} was written under race config "
+            f"{checkpoint.race_config_name!r} ({checkpoint.race_config_hash[:12]}), not "
+            f"{race_config.name!r} ({config_hash(race_config)[:12]}) — start a fresh DB to run "
+            f"a different or edited config"
+        )
     return LoopState(
         physio=checkpoint.physiology,
         park=checkpoint.environment,
-        start_hour=checkpoint.start_hour,
+        race_config=race_config,
         true_pos=checkpoint.true_pos,
         believed_pos=checkpoint.believed_pos,
         last_ate_min_ago=checkpoint.last_ate_min_ago,
-        rng=db.rng_from_state(checkpoint.rng_state),
+        last_drank_min_ago=checkpoint.last_drank_min_ago,
         loop=checkpoint.loop,
         books_collected=frozenset(checkpoint.books_collected_this_loop),
         dist_since_loop_start_km=checkpoint.dist_since_loop_start_km,
+        pending_events=tuple(checkpoint.pending_events),
     )
+
+
+def _next_scheduled_event(
+    state: LoopState, prev_elapsed_min: float, has_found_new_book: bool
+) -> str | None:
+    """Queues this tick's scheduled events behind any still pending, and hands out at most one.
+    A book find takes the tick's single event slot (ADR-0015), so on a found_book tick the whole
+    queue waits — every runner still gets every scheduled event, just possibly a tick late."""
+    queue = state.pending_events + tuple(
+        events_due(state.race_config, prev_elapsed_min, state.physio.elapsed_min)
+    )
+    if has_found_new_book or not queue:
+        state.pending_events = queue
+        return None
+    state.pending_events = queue[1:]
+    return queue[0]
 
 
 def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observation:
@@ -196,6 +246,7 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
     from here on. Grade is read at state.true_pos before this tick's move, same reasoning."""
     the_course = course_mod.load_course()
     grade_pct = course_mod.grade_pct_at(the_course, state.true_pos)
+    prev_elapsed_min = state.physio.elapsed_min
 
     state.physio = physiology.tick(
         state.physio,
@@ -206,12 +257,21 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
         ate=decision.eat,
         drank=decision.drink,
     )
-    state.park = frozen_head_state_park.tick(state.park, dt_min, state.start_hour, state.rng)
-    state.last_ate_min_ago = 0.0 if decision.eat else state.last_ate_min_ago + dt_min
+    next_park_min = state.park.elapsed_min + dt_min
+    state.park = frozen_head_state_park.tick(
+        state.park, dt_min, state.start_hour, weather_at(state.race_config, next_park_min)
+    )
+    state.last_ate_min_ago = _minutes_since(state.last_ate_min_ago, decision.eat, dt_min)
+    state.last_drank_min_ago = _minutes_since(state.last_drank_min_ago, decision.drink, dt_min)
 
     collapsed = physiology.has_collapsed(state.physio.bonk_push_min)
     pace = physiology.compute_pace(
-        BASE_PACE_MIN_PER_KM, decision.effort, state.physio.glycogen_pct, collapsed, grade_pct
+        BASE_PACE_MIN_PER_KM,
+        decision.effort,
+        state.physio.glycogen_pct,
+        collapsed,
+        grade_pct,
+        hydration_pct=state.physio.hydration_pct,
     )
     # A tick under a rest_min>0 decision covers no ground — otherwise "rest" was free (HR/
     # glycogen/position all advanced exactly as if still moving), so the sim had no way to make
@@ -239,21 +299,13 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
         state.park.fog_pct,
         state.park.is_daylight,
         state.physio.elapsed_min,
-        state.rng,
+        gps_rng(state.race_config.seed, state.physio.elapsed_min),
     )
 
     terrain = course_mod.terrain_at(the_course, state.true_pos)
-    # Special events (trip/puddle/etc.) never override a book find — book-found is checked
-    # first and, per ADR-0015, geometrically can't double-fire with itself in one tick, but a
-    # special event rolled independently could still land on the same tick as a book find, so
-    # this ordering (not just "first non-None wins") is what actually enforces single-event.
-    special_event = None
-    if not has_found_new_book:
-        special_event = course_mod.detect_special_event(
-            terrain, grade_pct, state.park.is_daylight, state.rng
-        )
+    special_event = _next_scheduled_event(state, prev_elapsed_min, has_found_new_book)
     # Independent of event — a sleep-deprived hallucination and a book find/trip can coincide.
-    hallucination = hallucinations.roll(state.physio.elapsed_min, state.rng)
+    hallucination = hallucination_due(state.race_config, prev_elapsed_min, state.physio.elapsed_min)
 
     return _build_observation(
         the_course,
@@ -266,12 +318,21 @@ def advance_tick(state: LoopState, decision: Decision, dt_min: float) -> Observa
         state.loop,
         state.books_collected,
         state.last_ate_min_ago,
+        state.last_drank_min_ago,
         pace,
         has_found_new_book,
         terrain,
         special_event,
         hallucination,
     )
+
+
+def _minutes_since(minutes_ago: float | None, did_it: bool, dt_min: float) -> float | None:
+    """Advance a "minutes since last ate/drank" counter: 0 on the tick it happens, None until
+    the first time."""
+    if did_it:
+        return 0.0
+    return None if minutes_ago is None else minutes_ago + dt_min
 
 
 def _estimate_cadence(effort_rpe: int) -> int:
@@ -299,8 +360,11 @@ def _build_checkpoint(
         books_collected_this_loop=sorted(snapshot.books_collected),
         dist_since_loop_start_km=snapshot.dist_since_loop_start_km,
         last_ate_min_ago=snapshot.last_ate_min_ago,
+        last_drank_min_ago=snapshot.last_drank_min_ago,
         last_decision=decision,
-        rng_state=snapshot.rng_state,
+        race_config_name=snapshot.race_config.name,
+        race_config_hash=config_hash(snapshot.race_config),
+        pending_events=list(snapshot.pending_events),
         summary_body=runner.summary_body,
         latest_highlight=runner.latest_highlight,
         summary_covers_up_to_elapsed_min=runner.summary_covers_up_to_elapsed_min,
@@ -359,7 +423,8 @@ async def think(
     true_lon = snapshot.true_pos[1]
     try:
         history = await db.get_recent_turns(runner.conn, runner.runner_id, SLIDING_WINDOW_N)
-        with propagate_attributes(session_id=runner.runner_id, tags=["barkley-smoke-test"]):
+        tags = ["barkley-smoke-test", f"race:{snapshot.race_config.name}"]
+        with propagate_attributes(session_id=runner.runner_id, tags=tags):
             async with runner.sem:
                 outcome = await runner.participant.decide(
                     obs, history, runner.summary_body, runner.latest_highlight
@@ -440,7 +505,8 @@ def _build_observation(
     believed_pos: tuple[float, float],
     loop: int,
     books_collected: frozenset[int],
-    last_ate_min_ago: float,
+    last_ate_min_ago: float | None,
+    last_drank_min_ago: float | None,
     pace: float,
     has_found_new_book: bool,
     terrain: str,
@@ -456,7 +522,9 @@ def _build_observation(
         pace_min_per_km=pace,
         cadence=_estimate_cadence(decision.effort),
         feel=physiology.describe_feel(physio.glycogen_pct, collapsed),
-        last_ate_min_ago=round(last_ate_min_ago),
+        thirst=physiology.describe_thirst(physio.hydration_pct),
+        last_ate_min_ago=last_ate_min_ago,
+        last_drank_min_ago=last_drank_min_ago,
         bearing_deg=decision.bearing_deg,
         gps_guess=believed_pos,
         dist_to_trail_km=course_mod.dist_to_trail_km(course, true_pos),
@@ -555,23 +623,24 @@ async def _broadcast_already_ended_race(
 
 
 async def _resume_or_start(
-    runner: RunnerLoop, conn: aiosqlite.Connection, on_update: OnUpdate | None
+    runner: RunnerLoop,
+    conn: aiosqlite.Connection,
+    on_update: OnUpdate | None,
+    race_config: RaceConfig,
 ) -> tuple[LoopState, bool]:
     """Loads runner's checkpoint if one exists and restores LoopState from it, or builds fresh
     initial state otherwise. Returns (state, already_ended) — already_ended is True when a
     loaded checkpoint's status is already terminal (ADR-0019), in which case run() must not
     enter the tick loop; this function has already re-announced the existing outcome via
-    _broadcast_already_ended_race."""
+    _broadcast_already_ended_race. Raises RaceConfigMismatch if the checkpoint was written under
+    a different race config than `race_config`."""
     checkpoint = await db.load_checkpoint(conn, runner.runner_id)
     if checkpoint is None:
-        rng = random.Random()
-        # Barkley's horn blows any time midnight-noon
-        start_hour = rng.uniform(0.0, 12.0)
-        state = build_initial_state(rng, start_hour)
-        logger.info("Starting %s fresh, start_hour=%.2f", runner.runner_id, start_hour)
+        state = build_initial_state(race_config)
+        logger.info("Starting %s fresh on race config %s", runner.runner_id, race_config.name)
         return state, False
 
-    state = restore_state(checkpoint)
+    state = restore_state(checkpoint, race_config)
     runner.decision = checkpoint.last_decision
     runner.summary_body = checkpoint.summary_body
     runner.latest_highlight = checkpoint.latest_highlight
@@ -592,6 +661,21 @@ async def _resume_or_start(
         await _broadcast_already_ended_race(runner, checkpoint, on_update)
         return state, True
     return state, False
+
+
+async def _resume_or_start_or_close(
+    runner: RunnerLoop,
+    conn: aiosqlite.Connection,
+    on_update: OnUpdate | None,
+    race_config: RaceConfig,
+) -> tuple[LoopState, bool]:
+    """_resume_or_start, closing `conn` if it raises — run()'s own try/finally only starts after
+    this, and a refused resume (RaceConfigMismatch) is an expected way for a run to end."""
+    try:
+        return await _resume_or_start(runner, conn, on_update, race_config)
+    except Exception:
+        await conn.close()
+        raise
 
 
 def is_stop_requested(stop_event: asyncio.Event | None) -> bool:
@@ -621,12 +705,16 @@ async def _drain_tasks(tasks: list[asyncio.Task], cancel: bool) -> None:
 
 
 async def run(
+    race_config: RaceConfig,
     speed: float = 1.0,
     duration_min: float = FULL_RACE_MINUTES,
     on_update: OnUpdate | None = None,
     stop_event: asyncio.Event | None = None,
 ) -> None:
-    """speed=1.0 is real Barkley pacing (CLAUDE.md: "the eventual real way to run this is at
+    """race_config fixes every race condition — start hour, weather, events, hallucinations,
+    GPS-noise seed (ADR-0024). A checkpoint written under a different config is refused.
+
+    speed=1.0 is real Barkley pacing (CLAUDE.md: "the eventual real way to run this is at
     1x realtime... 60x/600x speed is for iterating during development, not the intended
     experience") — higher values only compress wall-clock time between ticks, never sim time
     itself (TICK_DT_MIN, physiology, everything else is unchanged).
@@ -645,7 +733,7 @@ async def run(
     conn = await db.init_db(DB_PATH)
     runner = RunnerLoop(Participant(load_persona(PERSONA_PATH)), conn, asyncio.Semaphore(5))
 
-    state, already_ended = await _resume_or_start(runner, conn, on_update)
+    state, already_ended = await _resume_or_start_or_close(runner, conn, on_update, race_config)
     if already_ended:
         await conn.close()
         return
@@ -660,9 +748,9 @@ async def run(
         for _ in range(n_ticks):
             decision = runner.decision
             obs = advance_tick(state, decision, TICK_DT_MIN)
-            # rng_state captured here, same tick as physio/park, so a checkpoint built from
-            # this snapshot represents one consistent instant — not whatever rng looks like by
-            # the time the async think() task using it actually runs.
+            # pending_events captured here, same tick as physio/park, so a checkpoint built
+            # from this snapshot represents one consistent instant — not whatever the queue
+            # looks like by the time the async think() task using it actually runs.
             snapshot = StateSnapshot(
                 physio=state.physio,
                 park=state.park,
@@ -673,7 +761,9 @@ async def run(
                 books_collected=state.books_collected,
                 dist_since_loop_start_km=state.dist_since_loop_start_km,
                 last_ate_min_ago=state.last_ate_min_ago,
-                rng_state=db.serialize_rng_state(state.rng),
+                last_drank_min_ago=state.last_drank_min_ago,
+                race_config=state.race_config,
+                pending_events=state.pending_events,
             )
             last_good_snapshot = snapshot
             logger.info(
@@ -731,6 +821,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--race",
+        required=True,
+        help="Race config name: a file under server/races/ without .yaml (ADR-0024).",
+    )
+    parser.add_argument(
         "--fresh",
         action="store_true",
         help="Delete any existing smoke-test DB first, so this run starts a new race instead "
@@ -757,4 +852,5 @@ if __name__ == "__main__":
     if args.fresh:
         Path(DB_PATH).unlink(missing_ok=True)
 
-    asyncio.run(run(speed=args.speed, duration_min=args.duration_min))
+    config = load_race_config(args.race)
+    asyncio.run(run(config, speed=args.speed, duration_min=args.duration_min))

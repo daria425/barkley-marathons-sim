@@ -13,9 +13,15 @@ from observability import setup_observability
 langfuse = setup_observability()
 
 from sim.loop import run  # noqa: E402 (must follow setup_observability(), see module docstring)
+from sim.race_config import load_race_config  # noqa: E402
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--race",
+        required=True,
+        help="Race config name: a file under server/races/ without .yaml (ADR-0024).",
+    )
     parser.add_argument(
         "--speed",
         type=float,
@@ -33,8 +39,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print(
-        f"Starting Barkley smoke test — one runner, speed={args.speed}x, "
+        f"Starting Barkley smoke test — one runner, race={args.race}, speed={args.speed}x, "
         f"duration={args.duration_min} sim-min..."
     )
-    asyncio.run(run(speed=args.speed, duration_min=args.duration_min))
+    asyncio.run(run(load_race_config(args.race), speed=args.speed, duration_min=args.duration_min))
     langfuse.flush()  # short-lived script — nothing sends without this

@@ -33,6 +33,7 @@ setup_observability()
 
 # noqa: E402 below — must follow setup_observability(), see its docstring
 import aiosqlite  # noqa: E402
+from pydantic import ValidationError  # noqa: E402
 
 import db  # noqa: E402
 from models import (  # noqa: E402
@@ -43,7 +44,14 @@ from models import (  # noqa: E402
     RaceState,
 )
 from sim import course as course_mod  # noqa: E402
-from sim.loop import DB_PATH, FULL_RACE_MINUTES, run, sleep_unless_stopped  # noqa: E402
+from sim.loop import (  # noqa: E402
+    DB_PATH,
+    FULL_RACE_MINUTES,
+    RaceConfigMismatch,
+    run,
+    sleep_unless_stopped,
+)
+from sim.race_config import RaceConfig, load_race_config  # noqa: E402
 
 # How many consecutive run() crashes with zero sim-time progress the supervisor tolerates
 # before giving up — a transient hiccup (DB lock, a one-off bad state) gets retried, a
@@ -118,13 +126,16 @@ async def _broadcast(race_state: RaceState) -> None:
             _ws_clients.discard(ws)
 
 
-async def _supervised_run(speed: float, duration_min: float, stop_event: asyncio.Event) -> None:
+async def _supervised_run(
+    race_config: RaceConfig, speed: float, duration_min: float, stop_event: asyncio.Event
+) -> None:
     """Wraps sim.loop.run() with crash-restart. run()'s own crash boundary (sim/loop.py)
     checkpoints best-effort before re-raising, and db.load_checkpoint (ADR-0008) means a fresh
     run() call resumes right where the last one left off — so on a crash, this just calls
     run() again rather than losing the race. Keeps calling until `duration_min` of sim-time
     has actually elapsed (tracked via _health, updated every tick by _broadcast) or too many
-    crashes happen in a row with zero progress."""
+    crashes happen in a row with zero progress. A refused resume (RaceConfigMismatch, ADR-0024)
+    isn't retried at all: it would fail identically every time."""
     remaining = duration_min
     consecutive_failures = 0
     _health["alive"] = True
@@ -133,11 +144,16 @@ async def _supervised_run(speed: float, duration_min: float, stop_event: asyncio
             start_elapsed = _health["last_tick_elapsed_min"] or 0.0
             try:
                 await run(
+                    race_config,
                     speed=speed,
                     duration_min=remaining,
                     on_update=_broadcast,
                     stop_event=stop_event,
                 )
+                return
+            except RaceConfigMismatch as e:
+                _health["last_error"] = f"{type(e).__name__}: {e}"
+                logger.info("[supervisor] not resuming: %s", e)
                 return
             except Exception as e:
                 last_elapsed = _health["last_tick_elapsed_min"] or start_elapsed
@@ -172,23 +188,35 @@ def health_check():
     return {"status": "ok"}
 
 
+def _load_race_or_http_error(race: str) -> RaceConfig:
+    try:
+        return load_race_config(race)
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(status_code=404, detail=f"unknown race config: {race!r}") from e
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=f"invalid race config {race!r}: {e}") from e
+
+
 @app.post("/run", dependencies=[Depends(require_admin_token)])
-async def run_ultra_sim(speed: float = 1.0, duration_min: float = FULL_RACE_MINUTES):
+async def run_ultra_sim(race: str, speed: float = 1.0, duration_min: float = FULL_RACE_MINUTES):
     """Kicks off the sim loop as a background task and returns immediately — the sim never
     waits for callers any more than it waits for the LLM. Only one run at a time in v1
     (single-runner, CLAUDE.md). duration_min is the race cutoff (ADR-0019) and defaults to the
     full 60h; pass a smaller value for a bounded live canary. POST /stop ends a run early.
+    `race` names a config under server/races/ (ADR-0024) and is required: every run says which
+    fixed conditions it ran under.
     Requires the X-Admin-Token header (see require_admin_token) — this is the one endpoint that
     costs real money and starts a race other people can watch, so it isn't left open to anyone
     who finds the URL."""
     global _run_task, _stop_event
     if _run_task is not None and not _run_task.done():
         return {"status": "already running"}
+    race_config = _load_race_or_http_error(race)
     _stop_event = asyncio.Event()
     _run_task = asyncio.create_task(
-        _supervised_run(speed=speed, duration_min=duration_min, stop_event=_stop_event)
+        _supervised_run(race_config, speed=speed, duration_min=duration_min, stop_event=_stop_event)
     )
-    return {"status": "started", "speed": speed, "duration_min": duration_min}
+    return {"status": "started", "race": race, "speed": speed, "duration_min": duration_min}
 
 
 @app.post("/stop", dependencies=[Depends(require_admin_token)])

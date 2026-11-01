@@ -1,7 +1,7 @@
 # ADR-0003: Explicit `rng: random.Random` injection, never global `random.*` calls
 
 **Date**: 2026-09-17
-**Status**: accepted
+**Status**: accepted, amended by [ADR-0024](0024-fixed-race-conditions-via-race-config.md) (the single shared rng is gone; GPS noise draws from a per-tick rng seeded by the race config)
 **Deciders**: Daria
 
 ## Context

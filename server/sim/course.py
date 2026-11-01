@@ -21,9 +21,6 @@ from haversine import Unit, haversine, inverse_haversine
 
 from sim.sim_constants import (
     BOOK_PROXIMITY_KM,
-    BOTTLE_DROP_CHANCE_PER_TICK,
-    BRIAR_CHANCE_PER_TICK,
-    BRIAR_TERRAIN,
     LOOP_COMPLETE_MIN_FRACTION,
     LOOP_COMPLETE_RADIUS_KM,
     N_BOOKS,
@@ -33,15 +30,9 @@ from sim.sim_constants import (
     NOISE_FOG_SCALE_KM,
     NOISE_NIGHT_KM,
     OFF_TRAIL_TERRAIN,
-    PUDDLE_CHANCE_PER_TICK,
-    PUDDLE_TERRAIN,
     RESAMPLE_INTERVAL_KM,
     TERRAIN_LABELS,
     TRAIL_PROXIMITY_KM,
-    TRIP_CHANCE_PER_TICK,
-    TRIP_GRADE_PCT_THRESHOLD,
-    TRIP_TERRAIN,
-    WILDLIFE_CHANCE_PER_TICK,
 )
 
 GPX_PATH = Path(__file__).parent.parent / "files" / "Barkley_Challenge_Loop_FKT.gpx"
@@ -183,31 +174,6 @@ def books_found_this_tick(
     return frozenset(found), has_found_new
 
 
-def detect_special_event(
-    terrain: str, grade_pct: float, is_daylight: bool, rng: Random
-) -> str | None:
-    """Rare comedic events, rolled once per tick — only called when no book was found this
-    tick (found_book takes priority, see sim/loop.py's advance_tick). Checked in a fixed
-    priority order, each an early return, so at most one fires per tick — the string values
-    match models.EventType (not imported here to avoid sim/ <-> models.py circularity).
-
-    Terrain/grade-gated checks only roll on qualifying ground; dropped_water_bottle is
-    ungated (any terrain, any time) and checked last, as the special event of last resort."""
-    if (
-        terrain in TRIP_TERRAIN or abs(grade_pct) >= TRIP_GRADE_PCT_THRESHOLD
-    ) and rng.random() < TRIP_CHANCE_PER_TICK:
-        return "tripped_and_fell"
-    if terrain in PUDDLE_TERRAIN and rng.random() < PUDDLE_CHANCE_PER_TICK:
-        return "stepped_in_puddle"
-    if terrain in BRIAR_TERRAIN and rng.random() < BRIAR_CHANCE_PER_TICK:
-        return "briar_scratch"
-    if not is_daylight and rng.random() < WILDLIFE_CHANCE_PER_TICK:
-        return "spooked_by_wildlife"
-    if rng.random() < BOTTLE_DROP_CHANCE_PER_TICK:
-        return "dropped_water_bottle"
-    return None
-
-
 def loop_completed(
     course: Course, pos: tuple[float, float], dist_since_loop_start_km: float
 ) -> bool:
@@ -226,8 +192,8 @@ def believed_position(
     rng: Random,
 ) -> tuple[float, float]:
     """Noisy believed position — magnitude grows with fog, night, and elapsed time (a fatigue
-    proxy; no sleep_debt field yet, see ADR-0001). Two rng draws (direction, offset), like the
-    weather draws in frozen_head_state_park.py."""
+    proxy; no sleep_debt field yet, see ADR-0001). Two rng draws (direction, offset) from `rng`,
+    which the loop builds fresh each tick via race_config.gps_rng (ADR-0024)."""
     fatigue_km = min(elapsed_min / 60 * NOISE_FATIGUE_PER_HOUR_KM, NOISE_FATIGUE_CAP_KM)
     magnitude_km = (
         NOISE_BASE_KM

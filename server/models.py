@@ -12,8 +12,9 @@ from pydantic import BaseModel
 from sim.frozen_head_state_park import FrozenHeadStatePark
 from sim.physiology import PhysiologyState
 
-# Single event per tick (see ADR-0015/ADR-0016) — detectors run in a fixed priority order and
-# the first hit wins. Add new values here as other trigger events land.
+# Single event per tick (see ADR-0015/ADR-0016). found_book comes from walking past a book; every
+# other value fires from the race config's fixed schedule (ADR-0024), and one that lands on a
+# found_book tick waits for the next tick. Add new values here as other trigger events land.
 EventType = Literal[
     "found_book",
     "tripped_and_fell",
@@ -39,7 +40,12 @@ class Observation(BaseModel):
     pace_min_per_km: float
     cadence: int
     feel: str  # "legs heavy", "bonking", etc.
-    last_ate_min_ago: int
+    thirst: str  # "not thirsty" .. "dizzy, badly dehydrated" (physiology.describe_thirst)
+    # Sim-minutes since the runner last ate/drank; None = not once since the start. Kept as
+    # the raw float (not rounded) so the prompt can say "just now" for an eat on the last tick
+    # instead of "0 min ago", which models read as "haven't eaten" (see format_observation).
+    last_ate_min_ago: float | None
+    last_drank_min_ago: float | None
     bearing_deg: float
     gps_guess: tuple[float, float]  # NOISY believed position
     dist_to_trail_km: float  # raw distance to nearest trail point — continuous, not clamped
@@ -94,10 +100,10 @@ class Checkpoint(BaseModel):
     """Full resumable state for one runner — see ADR-0008. Rewritten wholesale (INSERT OR
     REPLACE, keyed by runner_id) on every brain decision, unlike the append-only `turns` log.
 
-    `rng_state` must round-trip exactly through db.py's rng (de)serialization helpers, not bare
-    json.dumps/loads — see their docstrings for why. Bit-exact RNG resume is a deliberate
-    choice (not just convenience): a checkpoint that let weather/noise diverge after a crash
-    would make "resume" produce a provably different race, not a continuation of the same one.
+    No rng state (ADR-0024): weather/events/hallucinations are fixed schedules and GPS noise is
+    rebuilt from the config's seed + sim time, so the race config itself is what makes resume
+    bit-exact. Its name and content hash are stored so a resume can refuse a config that changed
+    since the race started.
     """
 
     runner_id: str
@@ -112,9 +118,13 @@ class Checkpoint(BaseModel):
     # ADR-0010: resets each loop, real Barkley rule
     books_collected_this_loop: list[int] = []
     dist_since_loop_start_km: float = 0.0  # ADR-0010's loop-completion heuristic
-    last_ate_min_ago: float
+    last_ate_min_ago: float | None
+    last_drank_min_ago: float | None
     last_decision: Decision
-    rng_state: str
+    race_config_name: str
+    race_config_hash: str
+    # scheduled events deferred past a found_book tick, delivered one per tick (ADR-0024)
+    pending_events: list[EventType] = []
     # ADR-0018: split from a single ever-growing summary_text into a monologue-free running
     # log (summary_body) plus the single most recent segment's quoted monologue
     # (latest_highlight, replaced not appended on every fold) — see agents/memory.py's

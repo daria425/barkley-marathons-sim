@@ -1,12 +1,12 @@
 """Sleep-debt hallucinations (ADR-0001, ADR-0008, ADR-0017).
 
-Two independent mechanics, both gated by the same elapsed_min-driven severity curve (no
-separate sleep_debt field — see believed_position's fatigue_km in sim/course.py for the same
+Hallucination *lines* (Observation.hallucination) used to be rolled here per tick; since ADR-0024
+they fire from the race config's fixed schedule (sim/race_config.hallucination_due). What's left
+in this module is the memory side, gated by an elapsed_min-driven severity curve (no separate
+sleep_debt field — see believed_position's fatigue_km in sim/course.py for the same
 "elapsed_min as fatigue proxy" reasoning):
 
-1. `roll()` — a free-text Observation.hallucination string, injected straight into the prompt
-   verbatim (see agents/memory.py's format_observation). Independent of Observation.event.
-2. `jumble_text()` — degrades a compacted memory segment's rendered prose at the moment it's
+- `jumble_text()` — degrades a compacted memory segment's rendered prose at the moment it's
    folded (agents/memory.py's compact_segment), so recent sliding-window turns stay accurate
    while older, already-folded memory reads increasingly unreliable. Seeded from a stable hash
    of the segment's own text, not Python's randomized `hash()`, so compaction stays a pure
@@ -18,28 +18,9 @@ import re
 from random import Random
 
 from sim.sim_constants import (
-    HALLUCINATION_MAX_CHANCE_PER_TICK,
     HALLUCINATION_ONSET_MIN,
     HALLUCINATION_RAMP_MIN,
     JUMBLE_MAX_SEVERITY,
-)
-
-_HALLUCINATIONS = (
-    "You see a bear watching you from the ridge. It waves back when you wave.",
-    "You're certain you just passed your own house, though you've never been to Tennessee.",
-    "A stranger in a yellow raincoat says you're almost done. There is no stranger.",
-    "You hear someone laughing from somewhere in the trees. It sounds like Lazarus Lake.",
-    "The trail markers spell out your bib number in a language you don't speak.",
-    "You feel someone running just behind your left shoulder, matching your pace exactly.",
-    "The moon looks like a slice of pizza. You are extremely hungry.",
-    "You're briefly convinced this is a dream, and you're still asleep at the start line.",
-    "A conversation with your mother from third grade replays in your head, word for word.",
-    "You see the finish line. It's a mirage — you're only on loop 2.",
-    "The trees are whispering your name.",
-    "You feel very anxious for no describable reason.",
-    "You could swear you just saw a vending machine in the middle of the woods.",
-    "Your feet feel like they belong to someone else.",
-    "You hear a phone ringing somewhere in the wilderness. There is no phone.",
 )
 
 
@@ -49,15 +30,6 @@ def severity(elapsed_min: float) -> float:
         return 0.0
     span = HALLUCINATION_RAMP_MIN - HALLUCINATION_ONSET_MIN
     return min(1.0, (elapsed_min - HALLUCINATION_ONSET_MIN) / span)
-
-
-def roll(elapsed_min: float, rng: Random) -> str | None:
-    """Per-tick hallucination chance, scaled by severity — call with the live sim rng, same
-    convention as sim/course.py's detect_special_event."""
-    chance = severity(elapsed_min) * HALLUCINATION_MAX_CHANCE_PER_TICK
-    if rng.random() < chance:
-        return rng.choice(_HALLUCINATIONS)
-    return None
 
 
 def jumble_severity_for(elapsed_min: float) -> float:

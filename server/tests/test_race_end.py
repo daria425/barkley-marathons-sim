@@ -6,9 +6,9 @@ reasoning as test_fault_tolerance.py/test_think.py's fakes and ADR-0009's resume
 """
 
 import asyncio
-import random
 
 import pytest
+from race_config_helpers import make_race_config
 
 import db
 import sim.loop as loop_mod
@@ -19,12 +19,12 @@ from sim.sim_constants import TOTAL_LOOPS
 
 
 def test_check_race_end_running_when_neither_condition_holds():
-    state = build_initial_state(random.Random(1), start_hour=6.0)
+    state = build_initial_state(make_race_config())
     assert _check_race_end(state, STARTING_DECISION) is None
 
 
 def test_check_race_end_detects_quit():
-    state = build_initial_state(random.Random(1), start_hour=6.0)
+    state = build_initial_state(make_race_config())
     quit_decision = Decision(
         effort=5, eat=False, drink=False, bearing_deg=0.0, rest_min=0, quit=True, monologue="done"
     )
@@ -32,7 +32,7 @@ def test_check_race_end_detects_quit():
 
 
 def test_check_race_end_detects_finished():
-    state = build_initial_state(random.Random(1), start_hour=6.0)
+    state = build_initial_state(make_race_config())
     state.loop = TOTAL_LOOPS + 1
     assert _check_race_end(state, STARTING_DECISION) == "finished"
 
@@ -40,7 +40,7 @@ def test_check_race_end_detects_finished():
 def test_check_race_end_prioritizes_finished_over_quit():
     """A runner who completes the last loop on the same tick they'd have quit finishes, not
     DNFs — see _check_race_end's docstring on the priority order."""
-    state = build_initial_state(random.Random(1), start_hour=6.0)
+    state = build_initial_state(make_race_config())
     state.loop = TOTAL_LOOPS + 1
     quit_decision = Decision(
         effort=5, eat=False, drink=False, bearing_deg=0.0, rest_min=0, quit=True, monologue="done"
@@ -99,7 +99,7 @@ def test_run_stops_early_and_marks_dnf_quit_when_decision_says_quit(tmp_path, mo
     # Generous duration_min — the assertion is that the race ends well before exhausting it,
     # not on an exact tick count (the async think() round-trip that delivers quit=True isn't
     # pinned to a specific tick, same caveat as test_fault_tolerance.py's exact-tick tests).
-    asyncio.run(loop_mod.run(speed=100_000, duration_min=600))
+    asyncio.run(loop_mod.run(make_race_config(), speed=100_000, duration_min=600))
 
     checkpoint = _load_checkpoint(db_path)
     assert checkpoint is not None
@@ -112,7 +112,7 @@ def test_run_marks_dnf_cutoff_when_duration_min_exhausted(tmp_path, monkeypatch)
     monkeypatch.setattr(loop_mod, "DB_PATH", db_path)
     monkeypatch.setattr(loop_mod, "Participant", lambda persona: _NeverQuitParticipant(persona))
 
-    asyncio.run(loop_mod.run(speed=100_000, duration_min=1.0))
+    asyncio.run(loop_mod.run(make_race_config(), speed=100_000, duration_min=1.0))
 
     checkpoint = _load_checkpoint(db_path)
     assert checkpoint is not None
@@ -125,7 +125,7 @@ def test_run_does_not_re_tick_an_already_ended_race_on_resume(tmp_path, monkeypa
     monkeypatch.setattr(loop_mod, "DB_PATH", db_path)
     monkeypatch.setattr(loop_mod, "Participant", lambda persona: _NeverQuitParticipant(persona))
 
-    asyncio.run(loop_mod.run(speed=100_000, duration_min=1.0))
+    asyncio.run(loop_mod.run(make_race_config(), speed=100_000, duration_min=1.0))
     ended_checkpoint = _load_checkpoint(db_path)
     assert ended_checkpoint.status == "dnf_cutoff"
 
@@ -135,7 +135,9 @@ def test_run_does_not_re_tick_an_already_ended_race_on_resume(tmp_path, monkeypa
         updates.append(race_state)
 
     # Same duration_min again — a real re-tick would advance elapsed_min by another 1.0.
-    asyncio.run(loop_mod.run(speed=100_000, duration_min=1.0, on_update=collect))
+    asyncio.run(
+        loop_mod.run(make_race_config(), speed=100_000, duration_min=1.0, on_update=collect)
+    )
 
     resumed_checkpoint = _load_checkpoint(db_path)
     assert resumed_checkpoint.elapsed_min == ended_checkpoint.elapsed_min

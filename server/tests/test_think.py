@@ -8,8 +8,9 @@ applied to the failure path instead of the resume path.
 """
 
 import asyncio
-import random
 from types import SimpleNamespace
+
+from race_config_helpers import make_race_config
 
 import db
 from agents.participant import BrainOutcome
@@ -47,7 +48,9 @@ def _snapshot(state) -> StateSnapshot:
         books_collected=state.books_collected,
         dist_since_loop_start_km=state.dist_since_loop_start_km,
         last_ate_min_ago=state.last_ate_min_ago,
-        rng_state=db.serialize_rng_state(state.rng),
+        last_drank_min_ago=state.last_drank_min_ago,
+        race_config=state.race_config,
+        pending_events=state.pending_events,
     )
 
 
@@ -57,7 +60,7 @@ def test_think_keeps_old_decision_and_skips_checkpoint_on_failed_brain_call(capl
     async def scenario():
         conn = await db.init_db(":memory:")
         runner = RunnerLoop(_FakeParticipant("Hank", failure), conn, asyncio.Semaphore(5))
-        state = build_initial_state(random.Random(1), start_hour=6.0)
+        state = build_initial_state(make_race_config())
         obs = advance_tick(state, STARTING_DECISION, dt_min=0.1)
 
         await think(runner, obs, _snapshot(state))
@@ -88,7 +91,7 @@ def test_think_updates_decision_and_checkpoints_on_successful_brain_call():
         conn = await db.init_db(":memory:")
         outcome = BrainOutcome(decision=new_decision)
         runner = RunnerLoop(_FakeParticipant("Hank", outcome), conn, asyncio.Semaphore(5))
-        state = build_initial_state(random.Random(1), start_hour=6.0)
+        state = build_initial_state(make_race_config())
         obs = advance_tick(state, STARTING_DECISION, dt_min=0.1)
 
         await think(runner, obs, _snapshot(state))
@@ -119,7 +122,7 @@ def test_think_persists_a_failure_reason_even_for_the_outer_except_path(caplog):
     async def scenario():
         conn = await db.init_db(":memory:")
         runner = RunnerLoop(_RaisingParticipant("Hank"), conn, asyncio.Semaphore(5))
-        state = build_initial_state(random.Random(1), start_hour=6.0)
+        state = build_initial_state(make_race_config())
         obs = advance_tick(state, STARTING_DECISION, dt_min=0.1)
 
         await think(runner, obs, _snapshot(state))

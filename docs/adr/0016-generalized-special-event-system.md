@@ -1,7 +1,7 @@
 # ADR-0016: Generalized special-event system, extending `Observation.event` past `found_book`
 
 **Date**: 2026-09-25
-**Status**: accepted
+**Status**: accepted, amended by [ADR-0024](0024-fixed-race-conditions-via-race-config.md) (events fire on a fixed schedule from the race config, not by terrain-gated chance)
 **Deciders**: Daria
 
 ## Context

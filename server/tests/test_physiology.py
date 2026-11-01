@@ -10,7 +10,9 @@ from sim.physiology import (
     BONK_GLYCOGEN_PCT,
     BONK_PUSH_EFFORT_THRESHOLD,
     BONK_PUSH_LIMIT_MIN,
+    SEVERELY_DEHYDRATED_PCT,
     compute_pace,
+    describe_thirst,
     has_collapsed,
     initial_state,
     is_bonking,
@@ -180,3 +182,34 @@ def test_collapse_overrides_the_bonk_floor(pace, effort):
     gritting_it_out = compute_pace(pace, effort, glycogen_pct=bonk_glycogen, collapsed=False)
     collapsed = compute_pace(pace, effort, glycogen_pct=bonk_glycogen, collapsed=True)
     assert collapsed > gritting_it_out
+
+
+hydration = st.floats(min_value=0, max_value=100, allow_nan=False)
+
+
+@given(pace, effort, pct, hydration, hydration)
+def test_pace_never_speeds_up_as_hydration_drops(pace, effort, glycogen, a, b):
+    wetter, drier = max(a, b), min(a, b)
+    assert compute_pace(pace, effort, glycogen, hydration_pct=drier) >= compute_pace(
+        pace, effort, glycogen, hydration_pct=wetter
+    )
+
+
+@given(pace, effort)
+def test_severe_dehydration_slows_pace(pace, effort):
+    fine = compute_pace(pace, effort, 100.0, hydration_pct=100.0)
+    parched = compute_pace(pace, effort, 100.0, hydration_pct=SEVERELY_DEHYDRATED_PCT - 1)
+    assert parched > fine
+
+
+@given(hydration, hydration)
+def test_thirst_never_reads_better_as_hydration_drops(a, b):
+    order = ["not thirsty", "thirsty", "dry mouth, head pounding", "dizzy, badly dehydrated"]
+    wetter, drier = max(a, b), min(a, b)
+    assert order.index(describe_thirst(drier)) >= order.index(describe_thirst(wetter))
+
+
+@given(pace, effort)
+def test_bonking_slows_pace_even_at_max_effort(pace, effort):
+    fresh = compute_pace(pace, effort, glycogen_pct=100.0)
+    assert compute_pace(pace, effort, glycogen_pct=BONK_GLYCOGEN_PCT - 1) > fresh

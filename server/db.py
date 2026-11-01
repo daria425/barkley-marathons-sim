@@ -8,9 +8,6 @@ runner_id is stored now even though v1 has exactly one runner, so multi-persona 
 WHERE clause, not a schema change (same reasoning as the concurrency semaphore in loop.py).
 """
 
-import json
-import random
-
 import aiosqlite
 
 from models import Checkpoint, Decision, Observation
@@ -53,26 +50,6 @@ async def init_db(path: str) -> aiosqlite.Connection:
     await conn.execute(CREATE_CHECKPOINTS_TABLE_SQL)
     await conn.commit()
     return conn
-
-
-def serialize_rng_state(rng: random.Random) -> str:
-    """random.getstate() returns (version, internal_state, gauss_next), where internal_state
-    is a 625-tuple of ints. A bare json.dumps/loads round-trip turns tuples into lists, and
-    random.setstate() requires the internal_state to be an actual tuple — passing it a list
-    raises. This helper (and deserialize_rng_state below) does the tuple<->list conversion
-    explicitly so callers never hit that silently-wrong-shape bug."""
-    return json.dumps(rng.getstate())
-
-
-def deserialize_rng_state(state_json: str) -> tuple:
-    version, internal_state, gauss_next = json.loads(state_json)
-    return (version, tuple(internal_state), gauss_next)
-
-
-def rng_from_state(state_json: str) -> random.Random:
-    rng = random.Random()
-    rng.setstate(deserialize_rng_state(state_json))
-    return rng
 
 
 async def log_turn(

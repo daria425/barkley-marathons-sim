@@ -6,6 +6,7 @@ template over extracted facts), not an LLM call — this module owns both the sl
 replay and the compaction, and both are pure/unit-testable.
 """
 
+import math
 from collections import Counter
 from dataclasses import dataclass
 
@@ -193,6 +194,16 @@ def compact_segment(turns: list[tuple[Observation, Decision]]) -> tuple[str, str
     return segment_text, highlight_text
 
 
+def _since_line(past: str, participle: str, minutes_ago: float | None) -> str:
+    """ "You just ate." rather than "Last ate 0 min ago": a live Haiku run read the 0 as "haven't
+    eaten" and ate again on almost every call ("Ate zero minutes ago so I need calories")."""
+    if minutes_ago is None:
+        return f"You haven't {participle} since the start."
+    if minutes_ago < 1:
+        return f"You just {past}."
+    return f"You last {past} {math.floor(minutes_ago)} min ago."
+
+
 def format_observation(obs: Observation) -> str:
     """Render an Observation as plain text, framed as the runner's own perception ("your
     body and surroundings"), not as someone speaking to them — the `user` role just carries
@@ -204,7 +215,10 @@ def format_observation(obs: Observation) -> str:
         f"{obs.books_found} books found.",
         f"HR {obs.hr}, pace {obs.pace_min_per_km:.1f} min/km, cadence {obs.cadence}."
         + (" You are stopped, not covering ground." if obs.pace_min_per_km == 0.0 else ""),
-        f"You feel: {obs.feel}. Last ate {obs.last_ate_min_ago} min ago.",
+        f"You feel: {obs.feel}. Thirst: {obs.thirst}. "
+        + _since_line("ate", "eaten", obs.last_ate_min_ago)
+        + " "
+        + _since_line("drank", "drunk anything", obs.last_drank_min_ago),
         f"Bearing {obs.bearing_deg:.0f} degrees. Believed position: {obs.gps_guess}.",
         f"Distance to trail: {obs.dist_to_trail_km:.2f}km.",
         f"Terrain: {obs.terrain}. Weather: {obs.weather}.",

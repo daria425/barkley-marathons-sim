@@ -39,7 +39,9 @@ def make_turn(
         pace_min_per_km=8.0,
         cadence=170,
         feel=feel,
+        thirst="not thirsty",
         last_ate_min_ago=0,
+        last_drank_min_ago=None,
         bearing_deg=0.0,
         gps_guess=(0.0, 0.0),
         dist_to_trail_km=0.0,
@@ -323,3 +325,19 @@ def test_compact_if_needed_highlight_never_accumulates_across_many_folds():
             body, highlight, all_turns, folded_count, n=n, batch_size=batch_size
         )
     assert highlight.count('"') == 2
+
+
+def test_format_observation_says_just_ate_instead_of_zero_minutes():
+    """A live run read "Last ate 0 min ago" as "haven't eaten" and ate on almost every call."""
+    obs, _ = make_turn(30)
+    cases = {
+        (None, None): ("You haven't eaten since the start.", "You haven't drunk anything"),
+        (0.0, 0.5): ("You just ate.", "You just drank."),
+        (1.0, 29.5): ("You last ate 1 min ago.", "You last drank 29 min ago."),
+    }
+    for (ate, drank), (ate_line, drank_line) in cases.items():
+        text = format_observation(
+            obs.model_copy(update={"last_ate_min_ago": ate, "last_drank_min_ago": drank})
+        )
+        assert ate_line in text and drank_line in text
+        assert "0 min ago" not in text

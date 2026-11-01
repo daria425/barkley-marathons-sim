@@ -3,14 +3,13 @@
 Terrain/elevation live in course.py instead — those are a function of where on the GPX
 track the runner is, not of the weather. This file only knows about time and sky.
 
-Randomness is always passed in as `rng: random.Random`, never called globally
-(no bare `random.random()`), so callers can seed it and get reproducible ticks in tests.
+No randomness (ADR-0024): the weather condition is handed in by the caller from the race
+config's fixed cycle, and everything else here is a pure function of it plus the clock.
 """
 
-import random
 from dataclasses import dataclass
 
-from sim.sim_constants import TRANSITION_WEIGHTS, WEATHER_CONDITIONS, WEATHER_OFFSETS
+from sim.sim_constants import WEATHER_OFFSETS
 from sim.sim_utils import calculate_hour, format_local_time
 
 
@@ -26,40 +25,24 @@ class FrozenHeadStatePark:
 
 
 def compute_is_daylight(elapsed_min: float, start_hour: float) -> bool:
-    """Deterministic from time of day — no rng needed."""
     hour = calculate_hour(start_hour, elapsed_min)
     # 7am-7pm is daylight in Frozen Head State Park, around March - April
     return 7 <= hour < 19
 
 
-def compute_temperature(
-    elapsed_min: float, start_hour: float, weather: str, rng: random.Random
-) -> float:
-    """Diurnal curve (cooler at night, peak afternoon) + weather offset + small jitter."""
+def compute_temperature(elapsed_min: float, start_hour: float, weather: str) -> float:
+    """Diurnal curve (cooler at night, peak afternoon) + weather offset."""
     hour = calculate_hour(start_hour, elapsed_min)
     # diurnal curve: peak at 15:00, low at 3:00
     diurnal_temp = -5 * (hour - 15) ** 2 / 36 + 20
     # if  there  is a key error thats our fuckery
     weather_offset = WEATHER_OFFSETS[weather]
-    jitter = rng.uniform(-1, 1)
-    return diurnal_temp + weather_offset + jitter
+    return diurnal_temp + weather_offset
 
 
-def step_weather(weather: str, rng: random.Random) -> str:
-    """Weighted transition, biased toward staying the same condition — weather should read
-    as a discrete event ('it's pouring') that then holds, not per-tick flicker.
-
-    Weights are per-call, not scaled by dt_min — so weather changes are per-tick, and a
-    change to TICK_DT_MIN changes how long (in sim-time) a condition holds. Fine while the
-    tick size is fixed; if dt_min ever varies per tick, this needs rescaling.
-    """
-    weights = TRANSITION_WEIGHTS[weather]
-    return rng.choices(list(weights), weights=list(weights.values()), k=1)[0]
-
-
-def compute_fog_pct(weather: str, is_daylight: bool, rng: random.Random) -> float:
-    """Mostly weather-driven (fog/storm raise it), with a night bump. Feeds navigation
-    noise later — see CLAUDE.md's 'Comedy engine: true vs believed position'."""
+def compute_fog_pct(weather: str, is_daylight: bool) -> float:
+    """Weather-driven (fog/storm raise it), with a night bump. Feeds navigation noise — see
+    CLAUDE.md's 'Comedy engine: true vs believed position'."""
     base = 0.0
     if weather == "fog":
         base += 50.0
@@ -67,8 +50,7 @@ def compute_fog_pct(weather: str, is_daylight: bool, rng: random.Random) -> floa
         base += 20.0
     if not is_daylight:
         base += 10.0
-    jitter = rng.uniform(-5, 5)
-    return min(100.0, max(0.0, base + jitter))
+    return min(100.0, base)
 
 
 def compute_heat_index(temperature_c: float, weather: str) -> int:
@@ -92,43 +74,31 @@ def compute_heat_index(temperature_c: float, weather: str) -> int:
         return 7 + (1 if weather == "storm" else 0) + (1 if weather == "fog" else 0)
 
 
-def tick(
-    state: FrozenHeadStatePark, dt_min: float, start_hour: float, rng: random.Random
-) -> FrozenHeadStatePark:
-    """Advance the park's conditions by one tick. This is the one function the sim loop calls."""
-    elapsed_min = state.elapsed_min + dt_min
-    weather = step_weather(state.weather, rng)
+def conditions_at(elapsed_min: float, start_hour: float, weather: str) -> FrozenHeadStatePark:
+    """The park's conditions at a given sim-minute under a given weather. `weather` comes from
+    the caller (sim/race_config.weather_at, ADR-0024) — this module has no randomness and no
+    knowledge of the race config, only of what a weather condition does to the sky."""
     is_daylight = compute_is_daylight(elapsed_min, start_hour)
-    temperature_c = compute_temperature(elapsed_min, start_hour, weather, rng)
-    fog_pct = compute_fog_pct(weather, is_daylight, rng)
-    heat_index = compute_heat_index(temperature_c, weather)
+    temperature_c = compute_temperature(elapsed_min, start_hour, weather)
     return FrozenHeadStatePark(
         elapsed_min=elapsed_min,
         weather=weather,
         temperature_c=temperature_c,
         is_daylight=is_daylight,
-        fog_pct=fog_pct,
-        heat_index=heat_index,
+        fog_pct=compute_fog_pct(weather, is_daylight),
+        heat_index=compute_heat_index(temperature_c, weather),
         local_time=format_local_time(start_hour, elapsed_min),
     )
 
 
-def initial_state(start_hour: float = 6.0, rng: random.Random | None = None) -> FrozenHeadStatePark:
-    """Race-start conditions. start_hour matters because Barkley's start time is unpredictable
-    (horn blows any time midnight-noon) — never hardcode a sunrise assumption here."""
-    rng = rng or random.Random()
-    elapsed_time = 0.0
-    start_weather = rng.choice(WEATHER_CONDITIONS)
-    is_daylight = compute_is_daylight(elapsed_time, start_hour)
-    temperature_c = compute_temperature(elapsed_time, start_hour, start_weather, rng)
-    fog_pct = compute_fog_pct(start_weather, is_daylight, rng)
-    heat_index = compute_heat_index(temperature_c, start_weather)
-    return FrozenHeadStatePark(
-        elapsed_min=elapsed_time,
-        weather=start_weather,
-        temperature_c=temperature_c,
-        is_daylight=is_daylight,
-        fog_pct=fog_pct,
-        heat_index=heat_index,
-        local_time=format_local_time(start_hour, elapsed_time),
-    )
+def tick(
+    state: FrozenHeadStatePark, dt_min: float, start_hour: float, weather: str
+) -> FrozenHeadStatePark:
+    """Advance the park's conditions by one tick. This is the one function the sim loop calls."""
+    return conditions_at(state.elapsed_min + dt_min, start_hour, weather)
+
+
+def initial_state(start_hour: float, weather: str) -> FrozenHeadStatePark:
+    """Race-start conditions. Both come from the race config (ADR-0024): start_hour because
+    Barkley's horn blows any time midnight-noon, so never hardcode a sunrise assumption here."""
+    return conditions_at(0.0, start_hour, weather)

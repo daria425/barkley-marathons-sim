@@ -1,0 +1,81 @@
+# Study race 01: fixed conditions for comparing models (docs/v2-plan.md, Phase 1).
+# Every runner in every run of this config sees the same start hour, weather, events and
+# hallucinations at the same elapsed_min. The only randomness left in the sim is GPS noise,
+# derived from `seed` + tick index.
+#
+# Clock reference (start 06:00, daylight 07:00-19:00):
+#   night   elapsed 0-60, 780-1500, 2220-2940   (day 1 06-07, day 1 19:00-day 2 07:00, day 2 19:00-day 3 07:00)
+#   weather cycles every 360 min: clear 0-120, fog 120-240, rain 240-360, repeat
+#
+# Draft schedules below are hand-placed to fit those windows: wildlife only at night, puddles only
+# in rain, trips only in fog/rain. Briars and bottle drops can happen anywhere. Edit freely.
+
+name: study-01
+seed: 20261031
+start_hour: 6.0
+
+weather_cycle:
+  - { condition: clear, duration_min: 120 }
+  - { condition: fog, duration_min: 120 }
+  - { condition: rain, duration_min: 120 }
+
+# ~one every 90 sim-minutes, 38 total over the 60h race
+events:
+  - { at_elapsed_min: 40, event: spooked_by_wildlife }    # pre-dawn, clear
+  - { at_elapsed_min: 150, event: tripped_and_fell }      # fog
+  - { at_elapsed_min: 290, event: stepped_in_puddle }     # rain
+  - { at_elapsed_min: 400, event: briar_scratch }
+  - { at_elapsed_min: 530, event: tripped_and_fell }      # fog
+  - { at_elapsed_min: 640, event: stepped_in_puddle }     # rain
+  - { at_elapsed_min: 735, event: dropped_water_bottle }
+  - { at_elapsed_min: 830, event: spooked_by_wildlife }   # night 1
+  - { at_elapsed_min: 905, event: tripped_and_fell }      # night 1, fog
+  - { at_elapsed_min: 1000, event: stepped_in_puddle }    # night 1, rain
+  - { at_elapsed_min: 1090, event: spooked_by_wildlife }  # night 1
+  - { at_elapsed_min: 1180, event: briar_scratch }        # night 1
+  - { at_elapsed_min: 1260, event: tripped_and_fell }     # night 1, fog
+  - { at_elapsed_min: 1330, event: spooked_by_wildlife }  # night 1, rain
+  - { at_elapsed_min: 1420, event: stepped_in_puddle }    # night 1, rain
+  - { at_elapsed_min: 1530, event: briar_scratch }
+  - { at_elapsed_min: 1610, event: tripped_and_fell }     # fog
+  - { at_elapsed_min: 1700, event: stepped_in_puddle }    # rain
+  - { at_elapsed_min: 1810, event: dropped_water_bottle }
+  - { at_elapsed_min: 1900, event: briar_scratch }
+  - { at_elapsed_min: 1990, event: tripped_and_fell }     # fog
+  - { at_elapsed_min: 2075, event: stepped_in_puddle }    # rain
+  - { at_elapsed_min: 2180, event: briar_scratch }
+  - { at_elapsed_min: 2250, event: spooked_by_wildlife }  # night 2
+  - { at_elapsed_min: 2330, event: tripped_and_fell }     # night 2, fog
+  - { at_elapsed_min: 2420, event: stepped_in_puddle }    # night 2, rain
+  - { at_elapsed_min: 2510, event: spooked_by_wildlife }  # night 2
+  - { at_elapsed_min: 2650, event: tripped_and_fell }     # night 2, fog
+  - { at_elapsed_min: 2700, event: spooked_by_wildlife }  # night 2
+  - { at_elapsed_min: 2775, event: stepped_in_puddle }    # night 2, rain
+  - { at_elapsed_min: 2880, event: briar_scratch }        # night 2
+  - { at_elapsed_min: 3000, event: tripped_and_fell }     # fog
+  - { at_elapsed_min: 3070, event: dropped_water_bottle }
+  - { at_elapsed_min: 3150, event: stepped_in_puddle }    # rain
+  - { at_elapsed_min: 3240, event: briar_scratch }
+  - { at_elapsed_min: 3370, event: tripped_and_fell }     # fog
+  - { at_elapsed_min: 3420, event: briar_scratch }
+  - { at_elapsed_min: 3500, event: stepped_in_puddle }    # rain
+
+# From 40h (CLAUDE.md's sleep-debt threshold), getting more frequent toward the cutoff.
+# A sped-up slice shorter than 40h won't reach any of these.
+hallucinations:
+  - { at_elapsed_min: 2400, text: "You feel very anxious for no describable reason." }
+  - { at_elapsed_min: 2520, text: "The trees are whispering your name." }
+  - { at_elapsed_min: 2610, text: "The moon looks like a slice of pizza. You are extremely hungry." }  # night 2
+  - { at_elapsed_min: 2700, text: "You hear someone laughing from somewhere in the trees. It sounds like Lazarus Lake." }
+  - { at_elapsed_min: 2790, text: "You feel someone running just behind your left shoulder, matching your pace exactly." }
+  - { at_elapsed_min: 2870, text: "You hear a phone ringing somewhere in the wilderness. There is no phone." }
+  - { at_elapsed_min: 2960, text: "Your feet feel like they belong to someone else." }
+  - { at_elapsed_min: 3040, text: "You could swear you just saw a vending machine in the middle of the woods." }
+  - { at_elapsed_min: 3110, text: "You see a bear watching you from the ridge. It waves back when you wave." }
+  - { at_elapsed_min: 3180, text: "A stranger in a yellow raincoat says you're almost done. There is no stranger." }
+  - { at_elapsed_min: 3240, text: "The trail markers spell out your bib number in a language you don't speak." }
+  - { at_elapsed_min: 3300, text: "A conversation with your mother from third grade replays in your head, word for word." }
+  - { at_elapsed_min: 3360, text: "You're certain you just passed your own house, though you've never been to Tennessee." }
+  - { at_elapsed_min: 3420, text: "You're briefly convinced this is a dream, and you're still asleep at the start line." }
+  - { at_elapsed_min: 3480, text: "You see the finish line. It's a mirage." }
+  - { at_elapsed_min: 3540, text: "The trees are whispering your name." }

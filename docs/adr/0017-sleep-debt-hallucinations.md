@@ -1,7 +1,7 @@
 # ADR-0017: Sleep-debt hallucinations — free-text `Observation.hallucination` plus jumbled compaction memory
 
 **Date**: 2026-09-25
-**Status**: accepted
+**Status**: accepted, amended by [ADR-0024](0024-fixed-race-conditions-via-race-config.md) (hallucination lines fire on a fixed schedule; jumbling ramps from 40h to 55h)
 **Deciders**: Daria
 
 ## Context

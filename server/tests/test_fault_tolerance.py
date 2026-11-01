@@ -8,6 +8,7 @@ smoke_test.db) — same reasoning as test_think.py's fakes and ADR-0009's resume
 import asyncio
 
 import pytest
+from race_config_helpers import make_race_config
 
 import db
 import sim.loop as loop_mod
@@ -42,7 +43,7 @@ def test_crash_boundary_checkpoints_last_good_tick_before_reraising(tmp_path, mo
     monkeypatch.setattr(loop_mod, "advance_tick", flaky_advance_tick)
 
     with pytest.raises(RuntimeError, match="simulated crash"):
-        asyncio.run(loop_mod.run(speed=100_000, duration_min=10))
+        asyncio.run(loop_mod.run(make_race_config(), speed=100_000, duration_min=10))
 
     # Crashed on the 3rd tick — a checkpoint from the 2nd (last known-good) tick must exist.
     assert calls["n"] == 3
@@ -78,7 +79,7 @@ def test_fallback_checkpoint_fires_without_a_successful_brain_decision(tmp_path,
     monkeypatch.setattr(loop_mod, "Participant", lambda persona: _AlwaysFailingParticipant(persona))
     monkeypatch.setattr(loop_mod, "FALLBACK_CHECKPOINT_INTERVAL_MIN", loop_mod.TICK_DT_MIN)
 
-    asyncio.run(loop_mod.run(speed=100_000, duration_min=1))
+    asyncio.run(loop_mod.run(make_race_config(), speed=100_000, duration_min=1))
 
     async def load_saved_checkpoint():
         conn = await db.init_db(db_path)

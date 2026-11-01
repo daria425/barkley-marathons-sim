@@ -9,10 +9,12 @@ import asyncio
 import time
 
 from fastapi.testclient import TestClient
+from race_config_helpers import make_race_config, write_race_config
 
 import db
 import main
 import sim.loop as loop_mod
+import sim.race_config as race_config_mod
 from agents.participant import BrainOutcome
 from models import Decision
 
@@ -42,7 +44,7 @@ def _load_checkpoint(db_path: str):
 
 
 def test_check_race_end_killed_means_dnf_cutoff_but_real_outcomes_win():
-    state = loop_mod.build_initial_state(__import__("random").Random(1), 6.0)
+    state = loop_mod.build_initial_state(make_race_config())
     assert loop_mod._check_race_end(state, loop_mod.STARTING_DECISION, killed=True) == "dnf_cutoff"
     assert loop_mod._check_race_end(state, loop_mod.STARTING_DECISION, killed=False) is None
 
@@ -74,7 +76,11 @@ def test_stop_event_ends_run_as_dnf_cutoff_and_cancels_in_flight_brain_calls(tmp
             stop.set()
 
     started = time.monotonic()
-    asyncio.run(loop_mod.run(speed=1000, duration_min=600, on_update=on_update, stop_event=stop))
+    asyncio.run(
+        loop_mod.run(
+            make_race_config(), speed=1000, duration_min=600, on_update=on_update, stop_event=stop
+        )
+    )
     took = time.monotonic() - started
 
     assert took < 5  # not blocked on the 60s brain calls, nor on the rest of a 600-minute race
@@ -87,7 +93,7 @@ def test_stop_event_ends_run_as_dnf_cutoff_and_cancels_in_flight_brain_calls(tmp
 
     # the ended checkpoint is what keeps a stopped run from being resumed and spending again
     before = len(updates)
-    asyncio.run(loop_mod.run(speed=1000, duration_min=600, on_update=on_update))
+    asyncio.run(loop_mod.run(make_race_config(), speed=1000, duration_min=600, on_update=on_update))
     assert len(updates) == before + 1  # re-announced once, no tick loop
 
 
@@ -98,15 +104,16 @@ def test_post_stop_ends_a_live_run_promptly_and_viewers_see_a_plain_dnf_cutoff(
     monkeypatch.setattr(loop_mod, "Participant", lambda persona: _SlowParticipant(persona))
     monkeypatch.setattr(main, "RACE_ADMIN_TOKEN", "secret")
     monkeypatch.setattr(main, "_latest_race_state", None)
+    monkeypatch.setattr(race_config_mod, "RACES_DIR", tmp_path)
+    write_race_config(tmp_path, make_race_config())
     headers = {"x-admin-token": "secret"}
 
     with TestClient(main.app) as client:
         assert client.post("/stop", headers=headers).json() == {"status": "not running"}
         assert client.post("/stop").status_code == 401  # admin-token gated like /run
 
-        assert client.post("/run?speed=1&duration_min=600", headers=headers).json()["status"] == (
-            "started"
-        )
+        started = client.post("/run?race=test-race&speed=1&duration_min=600", headers=headers)
+        assert started.json()["status"] == "started"
         deadline = time.monotonic() + 5
         while client.get("/status").json()["last_tick_elapsed_min"] is None:
             assert time.monotonic() < deadline, "run never ticked"

@@ -1,8 +1,6 @@
-"""Unit tests for sim/hallucinations.py (ADR-0017): severity curve, per-tick hallucination
-rolls, and deterministic memory jumbling.
+"""Unit tests for sim/hallucinations.py (ADR-0017): severity curve and deterministic memory
+jumbling. Hallucination lines themselves are scheduled now (ADR-0024), see test_race_config.py.
 """
-
-from random import Random
 
 from hypothesis import given
 from hypothesis import strategies as st
@@ -33,26 +31,6 @@ def test_severity_is_monotonic_nondecreasing():
     points = [i * 5.0 for i in range(int(60 * 60 / 5))]
     values = [hallucinations.severity(p) for p in points]
     assert values == sorted(values)
-
-
-def test_roll_never_fires_before_onset():
-    rng = Random(1)
-    for _ in range(2000):
-        assert hallucinations.roll(HALLUCINATION_ONSET_MIN, rng) is None
-
-
-def test_roll_is_deterministic_for_a_given_rng_state():
-    rng_a = Random(9)
-    rng_b = Random(9)
-    results_a = [hallucinations.roll(HALLUCINATION_RAMP_MIN, rng_a) for _ in range(50)]
-    results_b = [hallucinations.roll(HALLUCINATION_RAMP_MIN, rng_b) for _ in range(50)]
-    assert results_a == results_b
-
-
-def test_roll_eventually_fires_well_past_onset():
-    rng = Random(42)
-    results = [hallucinations.roll(HALLUCINATION_RAMP_MIN, rng) for _ in range(500)]
-    assert any(r is not None for r in results)
 
 
 def test_jumble_text_is_a_noop_at_zero_severity():

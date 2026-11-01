@@ -16,6 +16,7 @@ This is a collaboration, not a hand-the-keys-over build. Specifically:
 - 5 loops of ~20 miles each, 60-hour cutoff
 - Hidden "books" along each loop. Runner must tear out their bib-number page as proof
 - No GPS for runners: they navigate with a compass and a noisy position estimate
+- Race conditions (start hour, weather, events, hallucinations) are fixed by a `RaceConfig`, identical for every runner and every run of that config (v2, see below)
 
 ## Scope: v1 vs later
 
@@ -30,7 +31,19 @@ This is a collaboration, not a hand-the-keys-over build. Specifically:
 
 **Next phase**: the full frontend (MapLibre map, ghost dots, watch cards, monologue feed, speed controls, Taps-on-quit) — see Frontend section, built against the now-landed API/WS contract (ADR-0011).
 
-**After that**: multiple competing personas (5–10 runners), reordered after the frontend — see Build order.
+**After that**: multiple competing personas (5–10 runners), reordered after the frontend — see Build order. **Superseded by v2 (below):** the next multi-runner step is several _models_ running the _same_ persona, not several personas.
+
+## v2: controlled multi-model study
+
+v1 (steps 1–3 of the Build order) is done: Haiku ran one race through the full stack. v2 turns it into a **study**: several models run the same persona, the same system prompt and the same race conditions, so **the model is the only variable**. LLM sampling variance (temperature 1) is kept on purpose; it's the interesting part. Full plan, phase details and open questions: **`docs/v2-plan.md`**. Read it before working on any v2 phase.
+
+v2 phases, each with its own plan check-in (same rules as "How we work together"):
+
+1. **Deterministic race (`RaceConfig`)** — _in progress._ All race conditions come from a data file, `server/races/<name>.yaml` (first one: `study-01.yaml`): `seed`, `start_hour` (06:00), a looping `weather_cycle` (clear 2h → fog 2h → rain 2h), and fixed-time schedules for `events` and `hallucinations`. No random weather, no rolled events or hallucinations, no temperature/fog jitter. GPS noise is the only sim randomness left, derived per tick from `seed` + the elapsed sim-minute (`sim/race_config.gps_rng`) so it never depends on what the runner did earlier. **No backwards compatibility** with v1's random mode: reverting means `git checkout`, not a flag. See ADR-0024.
+2. **OpenRouter migration** — every model, Haiku included, via one OpenAI-compatible client. **Not started; don't begin it without a check-in**: structured-output support per endpoint, `require_parameters` vs. `temperature`, prompt caching and Langfuse tracing all need deciding first (see the doc).
+3. **Multi-runner sim** — roster of models on one persona, shared world, per-runner checkpoints/status.
+4. **Frontend grid** — one tile per model, shared map with a dot per model.
+5. **Study runs** — several runs per model per race config; compare distributions, not single runs.
 
 ## Stack
 
@@ -67,7 +80,11 @@ Kept in mind for config decisions now, not built yet:
   sim/course.py      gpxpy loop, books, off-course terrain
   sim/frozen_head_state_park.py  weather, day/night, fog (class `FrozenHeadStatePark`) —
                       named for the race's actual, fixed venue; fine to be park-specific since
-                      the whole sim already is (books/loops/cutoffs are Barkley-only rules)
+                      the whole sim already is (books/loops/cutoffs are Barkley-only rules).
+                      Weather comes from the RaceConfig's cycle, no rng (v2)
+  sim/race_config.py RaceConfig model + YAML loader + pure lookups: weather at a minute, events/
+                      hallucinations scheduled since the last tick, per-tick GPS-noise rng (v2)
+  races/             race config data files (seed, start hour, weather cycle, schedules)
   agents/participant.py  Participant class (wraps a Persona), prompt build, thin complete()
                       wrapper around AsyncAnthropic, parses into Decision — renamed from the
                       originally-planned agents/brain.py once building it made a class the
@@ -125,7 +142,9 @@ class Observation(BaseModel):
     pace_min_per_km: float
     cadence: int
     feel: str              # "legs heavy", "bonking", etc.
-    last_ate_min_ago: int
+    thirst: str            # "not thirsty" .. "dizzy, badly dehydrated", from hydration
+    last_ate_min_ago: float | None    # None = not since the start; prompt says "You just ate."
+    last_drank_min_ago: float | None  # under 1 min, never "0 min ago" (ADR-0025)
     bearing_deg: float
     gps_guess: tuple[float, float]  # NOISY believed position
     dist_to_trail_km: float  # raw distance to nearest trail point — continuous, never clamped
@@ -162,15 +181,16 @@ Two more fields exist only on the broadcast/wire state (`models.py`'s `RunnerSta
 ## Physiology (keep simple, tune before adding LLM)
 
 - HR = f(effort, grade, heat, cardiac drift over elapsed time)
-- Glycogen drains with effort and refills when eating. At zero, pace collapses and `feel` = "bonking"
-- Hydration drains faster with heat
+- Glycogen drains with effort (6%/h per effort point, so an unfed runner bonks after ~2h40 at effort 5) and refills when eating. Below 20%, pace collapses and `feel` = "bonking"
+- Hydration drains faster with heat (10%/h + 4%/h per heat point). The model sees it as `thirst` (from 60%); pace slows ×1.3 below 40% and ×1.6 below 20%, stacking with a bonk (ADR-0025)
 - Core temp rises with effort + heat
-- Sleep debt past ~40h adds a random chance of hallucination events, which get injected into the observation
+- Sleep debt past ~40h brings hallucinations, injected into the observation. Since v2 they fire at fixed times from the RaceConfig's `hallucinations` schedule, not by chance. Memory jumbling (ADR-0017) ramps from 40h (`HALLUCINATION_ONSET_MIN`) to full strength at 55h (`HALLUCINATION_RAMP_MIN`)
+- Special events (trip, puddle, briars, wildlife, dropped bottle) fire at fixed times from the RaceConfig's `events` schedule, wherever the runner is (no terrain gating). One landing on a book-found tick is deferred to the next tick, so every runner gets every scheduled event
 
 ## Comedy engine: true vs believed position
 
 - Every runner has `true_pos` and `believed_pos` — this is part of the v1 single-runner core loop, not gated on multi-persona.
-- The agent only sees `believed_pos` (noisy). Noise increases with fog, night, and fatigue.
+- The agent only sees `believed_pos` (noisy). Noise increases with fog, night, and fatigue. The random part is drawn from an rng seeded by `(RaceConfig.seed, elapsed_min)`, so it's reproducible and independent of the runner's earlier path.
 - Frontend (later phase) draws the real dot, a ghost dot at believed position, and a line between them.
 
 ## Memory and persistence
@@ -179,8 +199,8 @@ The LLM needs continuity — it can't reason about "wtf happened before" without
 
 - **SQLite is the source of truth.** Every Observation + Decision pair is logged, and a checkpoint is written **on every brain decision** (not on a timer) — this is when there's genuinely new state worth not losing.
 - **Prompting uses a sliding window + autocompact.** Each brain call gets the last `SLIDING_WINDOW_N` full Observation/Decision objects verbatim, plus a running summary of everything older. When history exceeds N, compaction folds the oldest aged-out turns into the summary, in batches of `COMPACT_BATCH_SIZE` (ADR-0012) — not one line per tick. The exact values of N and the batch size are tuning constants (`agents/memory.py`), not a documented spec — pick whatever exercises compaction usefully for a given run; don't chase specific numbers here. **Per ADR-0008 (supersedes the original "LLM call, not code" line below), this is a deterministic, code-based, templated compaction** — not an LLM call — precisely because this subsystem's job is surviving a 60-hour run without losing state, and a second untestable LLM failure surface works against that. It also unlocks ADR-0001's deferred hallucination mechanic: a structured, code-owned summary can be deliberately degraded (dropped/reordered/misattributed facts, faded monologue lines) as sleep debt rises, which an LLM-generated summary couldn't be made to do on purpose. **Per ADR-0018, the summary is two pieces, not one flat string**: `summary_body` (ever-growing, monologue-free facts log) and `latest_highlight` (the single most recently folded segment's quoted monologue, replaced — not appended — on every fold, so old monologues don't accumulate forever). A live prod rerun showed monologues were ~70-80% of summary bytes and the dominant driver of unbounded per-call token growth over a full 60h race; splitting them out was judged sufficient (summary_body alone stays bounded by the race's own fixed length, well under Haiku's context window) without adding a hard token cap, which was considered and explicitly deferred (see ADR-0018's Alternatives).
-- **Resume-from-checkpoint is handled ourselves** — no LangGraph or external state-machine library. On restart, load the latest checkpoint (see ADR-0008's `Checkpoint` schema — includes `rng.getstate()` for bit-exact resume) + summary + last-N window from SQLite and continue.
-- **What's actually built vs. still phase 2** (per ADR-0005/0007's vertical-slice-first approach): SQLite logging, the sliding-window replay (`db.get_recent_turns` + `agents/memory.py`'s `turns_to_messages`), code-based compaction (`agents/memory.py.compact_if_needed`, ADR-0008), and checkpoint/resume are all wired in and working end to end: `sim/loop.py`'s `run()` calls `db.load_checkpoint` on startup and resumes from it (via `restore_state`, bit-exact including `rng` state) when one exists, or starts fresh otherwise — verified both by `tests/test_resume.py` (a scripted-decision reference-vs-resume comparison, ADR-0009) and by running the smoke test twice against the same DB and watching `elapsed_min`/turn counts continue rather than reset. `sim/loop.py --fresh` deletes the smoke-test DB first, for dev iteration that doesn't want to accidentally resume a stale checkpoint. `db.py`'s `turns` table stays a deliberately throwaway shape (see its module docstring); the `checkpoints` table (ADR-0008) is the real, separate, additive mechanism. **Still open**: an actual kill-mid-process integration test (ADR-0009's tests exercise the pure resume logic directly, not the live async `think()`/`asyncio.create_task` path under a real process kill).
+- **Resume-from-checkpoint is handled ourselves** — no LangGraph or external state-machine library. On restart, load the latest checkpoint (see ADR-0008's `Checkpoint` schema) + summary + last-N window from SQLite and continue. Since v2 (ADR-0024) the checkpoint no longer stores `rng.getstate()`: it stores the race config's name and content hash plus any pending deferred events, and the GPS-noise rng is rebuilt from seed + elapsed sim-minute. Resuming against a config whose hash no longer matches is refused.
+- **What's actually built vs. still phase 2** (per ADR-0005/0007's vertical-slice-first approach): SQLite logging, the sliding-window replay (`db.get_recent_turns` + `agents/memory.py`'s `turns_to_messages`), code-based compaction (`agents/memory.py.compact_if_needed`, ADR-0008), and checkpoint/resume are all wired in and working end to end: `sim/loop.py`'s `run()` calls `db.load_checkpoint` on startup and resumes from it (via `restore_state`, bit-exact) when one exists, or starts fresh otherwise — verified both by `tests/test_resume.py` (a scripted-decision reference-vs-resume comparison, ADR-0009) and by running the smoke test twice against the same DB and watching `elapsed_min`/turn counts continue rather than reset. `sim/loop.py --fresh` deletes the smoke-test DB first, for dev iteration that doesn't want to accidentally resume a stale checkpoint. `db.py`'s `turns` table stays a deliberately throwaway shape (see its module docstring); the `checkpoints` table (ADR-0008) is the real, separate, additive mechanism. **Still open**: an actual kill-mid-process integration test (ADR-0009's tests exercise the pure resume logic directly, not the live async `think()`/`asyncio.create_task` path under a real process kill).
 
 ## Personas
 
@@ -205,8 +225,10 @@ The LLM needs continuity — it can't reason about "wtf happened before" without
 1. **v1 — one runner, full loop, no frontend.** Weather/environment sim → physiology → course/books/noisy-position navigation → wire in the one LLM persona (direct AsyncAnthropic via `complete()`, Langfuse traced). Verify via logs/SQLite/API, not a UI. Physiology gets property-based unit tests before the LLM is plugged in; tune against reference data once behavior looks right.
 2. **Persistence + resume.** SQLite logging, checkpoint-per-decision, sliding-window + code-based autocompacted memory (ADR-0008), resume-on-restart.
 3. **Frontend.** Map, watch cards, monologue feed, controls — the experience described above, built against the by-then-stable API/WS contract. Moved ahead of multi-persona (ADR-0011's WS wiring landed and is worth a real consumer before multiplying runners on top of it; the concurrency pattern for multi-persona is already built and doesn't get more urgent by waiting).
-4. **Multi-persona.** 5–10 personas racing concurrently, using the concurrency pattern already built in v1.
+4. ~~**Multi-persona.** 5–10 personas racing concurrently, using the concurrency pattern already built in v1.~~ Replaced by v2's multi-model study (same persona, different models), see "v2: controlled multi-model study" above and `docs/v2-plan.md`.
 5. **Let it rip.** Polish, more personas, more comedy.
+
+Steps 1–3 are done.
 
 Each numbered phase gets its own plan-mode check-in before code starts, per "How we work together" above.
 
@@ -237,10 +259,13 @@ it only for quick non-traced iteration, never for a live test you actually want 
    physiology, weather, navigation noise, book events per ADR-0015) runs exactly as it would at
    full scope:
    ```
-   curl -X POST "http://localhost:8000/run?speed=20&duration_min=75"
+   curl -X POST "http://localhost:8000/run?race=study-01&speed=20&duration_min=75" \
+     -H "X-Admin-Token: $RACE_ADMIN_TOKEN"
    ```
-   `speed`/`duration_min` are request params, not code — adjust per test (e.g. lower `speed` to
-   read monologues as they scroll, raise `duration_min` to watch more loop/book behavior).
+   `race` (required, a file name under `server/races/` without `.yaml`), `speed` and
+   `duration_min` are request params, not code — adjust per test (e.g. lower `speed` to read
+   monologues as they scroll, raise `duration_min` to watch more loop/book behavior). Note
+   `study-01`'s hallucinations start at 40h, so a short slice won't show any.
 4. **Watch it live** over the WS the frontend will eventually consume:
    ```
    websocat ws://localhost:8000/ws

@@ -6,6 +6,22 @@ BONK_GLYCOGEN_PCT = 20.0
 BONK_PUSH_EFFORT_THRESHOLD = 7  # RPE at/above this while bonking counts as "pushing through it"
 BONK_PUSH_LIMIT_MIN = 30.0  # sim-minutes of pushing through a bonk before the body overrides you
 
+# Drain rates, rough real ultrarunning numbers. Glycogen: ~2,000 kcal of stored carbohydrate
+# lasts ~1.5h flat out and ~2.5-3h at a steady effort, so a runner who never eats bonks around
+# then. Hydration: sweat loss of ~0.3 L/h in the cold up to ~1.5 L/h in heat, against a ~3 L
+# deficit treated as 100%.
+GLYCOGEN_DRAIN_PCT_PER_HR_PER_EFFORT = 6.0  # effort 5 -> 30%/h, bonks after ~2h40 unfed
+HYDRATION_DRAIN_BASE_PCT_PER_HR = 10.0  # cold weather (heat 0)
+HYDRATION_DRAIN_PCT_PER_HR_PER_HEAT = 4.0  # heat 3 -> 22%/h, heat 7 -> 38%/h
+
+# Dehydration (ADR-0025): thirst shows from THIRSTY_PCT; pace suffers below DEHYDRATED_PCT and
+# more below SEVERELY_DEHYDRATED_PCT, stacking with a bonk.
+THIRSTY_PCT = 60.0
+DEHYDRATED_PCT = 40.0
+SEVERELY_DEHYDRATED_PCT = 20.0
+DEHYDRATED_PACE_FACTOR = 1.3
+SEVERELY_DEHYDRATED_PACE_FACTOR = 1.6
+
 
 @dataclass(frozen=True)
 class PhysiologyState:
@@ -42,14 +58,16 @@ def step_heart_rate(base_hr: int, effort_rpe: int, heat: int, elapsed_min: float
 
 def step_glycogen(glycogen_pct: float, effort_rpe: int, dt_min: float, ate: bool) -> float:
     """Drains with effort over dt_min; eating refills it. Never below 0."""
-    depletion = effort_rpe * 0.5 * (dt_min / 60)
+    depletion = effort_rpe * GLYCOGEN_DRAIN_PCT_PER_HR_PER_EFFORT * (dt_min / 60)
     refill = 15.0 if ate else 0.0
     return min(100.0, max(0.0, glycogen_pct - depletion + refill))
 
 
 def step_hydration(hydration_pct: float, heat: int, dt_min: float, drank: bool) -> float:
     """Drains faster with heat; drinking refills it. Never below 0."""
-    depletion = (1.0 + heat * 0.3) * (dt_min / 60)
+    depletion = (HYDRATION_DRAIN_BASE_PCT_PER_HR + heat * HYDRATION_DRAIN_PCT_PER_HR_PER_HEAT) * (
+        dt_min / 60
+    )
     refill = 20.0 if drank else 0.0
     return min(100.0, max(0.0, hydration_pct - depletion + refill))
 
@@ -91,22 +109,46 @@ def describe_feel(glycogen_pct: float, collapsed: bool) -> str:
     return "feeling good"
 
 
+def describe_thirst(hydration_pct: float) -> str:
+    """Text label for Observation.thirst, the model's only view of hydration."""
+    if hydration_pct < SEVERELY_DEHYDRATED_PCT:
+        return "dizzy, badly dehydrated"
+    if hydration_pct < DEHYDRATED_PCT:
+        return "dry mouth, head pounding"
+    if hydration_pct < THIRSTY_PCT:
+        return "thirsty"
+    return "not thirsty"
+
+
+def dehydration_pace_factor(hydration_pct: float) -> float:
+    if hydration_pct < SEVERELY_DEHYDRATED_PCT:
+        return SEVERELY_DEHYDRATED_PACE_FACTOR
+    if hydration_pct < DEHYDRATED_PCT:
+        return DEHYDRATED_PACE_FACTOR
+    return 1.0
+
+
 def compute_pace(
     start_pace_min_per_km: float,
     effort_rpe: int,
     glycogen_pct: float,
     collapsed: bool = False,
     grade_pct: float = 0.0,
+    hydration_pct: float = 100.0,
 ) -> float:
-    """Pace (min/km) from effort, adjusted for bonking, collapse, grade. Higher number = slower."""
+    """Pace (min/km) from effort, adjusted for bonking, dehydration, collapse, grade. Higher
+    number = slower. The fastest-pace floor applies to the effort pace before the bonk and
+    dehydration penalties; applied after, it swallowed them at effort 10 (ADR-0025)."""
     if collapsed:
         return start_pace_min_per_km * 4  # body overrides effort entirely
+    fastest = start_pace_min_per_km * 0.5
     effort_factor = 11 - effort_rpe  # RPE 10 -> fast, RPE 1 -> slow
-    pace = start_pace_min_per_km * (effort_factor / 5)
+    pace = max(start_pace_min_per_km * (effort_factor / 5), fastest)
     if is_bonking(glycogen_pct):
         pace *= 1.8
+    pace *= dehydration_pace_factor(hydration_pct)
     pace += grade_pct * 0.05
-    return max(pace, start_pace_min_per_km * 0.5)
+    return max(pace, fastest)
 
 
 def tick(
