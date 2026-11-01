@@ -69,9 +69,9 @@ async def log_turn(
     NULL rows). Before this, the only record of a failure was a print() line, gone the moment
     the process exited.
 
-    elapsed_min is rounded to the nearest whole minute before storage — memory.py replays
-    this back to the LLM, and "about 4 minutes in" reads more like how a runner actually
-    thinks than a 0.25-precision float would.
+    elapsed_min is stored as Observation.elapsed_min: whole minutes, floored
+    (sim_utils.whole_minutes) — memory.py replays it to the LLM, and "4 minutes in" reads more
+    like how a runner thinks than a fractional minute would.
     """
     await conn.execute(
         "INSERT INTO turns (runner_id, true_lat, true_lon, elapsed_min, observation_json, "
@@ -80,7 +80,7 @@ async def log_turn(
             runner_id,
             true_lat,
             true_lon,
-            round(obs.elapsed_min),
+            obs.elapsed_min,
             obs.model_dump_json(),
             decision.model_dump_json() if decision else None,
             failure_reason,
@@ -96,7 +96,7 @@ async def get_recent_turns(
     first (ready to replay in prompt order). Turns with a null decision (failed brain calls)
     are skipped — there's nothing to replay as the assistant's prior turn.
 
-    Ordered by row `id` (insertion order), NOT elapsed_min: log_turn rounds elapsed_min to whole
+    Ordered by row `id` (insertion order), NOT elapsed_min: log_turn floors elapsed_min to whole
     minutes, so several turns tie on it, and ordering by it scrambled the window replayed to
     the LLM within each minute (ties come back in arbitrary order, and this query reverses)."""
     cursor = await conn.execute(
@@ -126,7 +126,7 @@ async def get_monologues_page(
 ) -> tuple[list[tuple[int, float, str]], bool]:
     """One page of (id, elapsed_min, monologue) for the frontend feed, oldest-first, plus
     whether older rows exist past this page. Keyset-paginated and ordered on the row `id`
-    (`before` is an exclusive id), NOT elapsed_min: log_turn rounds elapsed_min to whole
+    (`before` is an exclusive id), NOT elapsed_min: log_turn floors elapsed_min to whole
     minutes, so several turns share one value and it can neither order turns nor serve as a
     cursor without skipping rows at a page boundary. Uses json_extract so a page never parses
     whole Observation/Decision blobs in Python — memory per call is bounded by `limit`."""

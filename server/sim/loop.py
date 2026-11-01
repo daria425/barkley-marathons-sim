@@ -30,7 +30,7 @@ from sim.race_config import (
     weather_at,
 )
 from sim.sim_constants import TOTAL_LOOPS
-from sim.sim_utils import format_clock_time
+from sim.sim_utils import format_clock_time, whole_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -390,7 +390,7 @@ async def _compact_and_checkpoint(
     )
     if new_folded_count != runner.summary_folded_count:
         newly_folded_elapsed = all_turns[new_folded_count - 1][0].elapsed_min
-        runner.summary_covers_up_to_elapsed_min = round(newly_folded_elapsed)
+        runner.summary_covers_up_to_elapsed_min = newly_folded_elapsed
         logger.info(
             "[%s] ...%s's memory compacts: %r (latest: %r)",
             obs.clock_time,
@@ -516,7 +516,7 @@ def _build_observation(
     collapsed = physiology.has_collapsed(physio.bonk_push_min)
     event = "found_book" if has_found_new_book else special_event
     return Observation(
-        elapsed_min=round(physio.elapsed_min),
+        elapsed_min=whole_minutes(physio.elapsed_min),
         clock_time=format_clock_time(start_hour, physio.elapsed_min),
         hr=physio.hr,
         pace_min_per_km=pace,

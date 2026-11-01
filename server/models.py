@@ -33,7 +33,7 @@ RunnerStatus = Literal["running", "finished", "dnf_cutoff", "dnf_quit"]
 
 
 class Observation(BaseModel):
-    elapsed_min: int
+    elapsed_min: int  # whole minutes, floored (sim_utils.whole_minutes), never rounded
     # e.g. "Day 2, 3:15 AM" — sim_utils.format_clock_time(start_hour, elapsed_min)
     clock_time: str
     hr: int
@@ -167,7 +167,7 @@ class CourseGeometry(BaseModel):
 
 
 class MonologueHistoryEntry(BaseModel):
-    # turns-table row id: unique and in insertion order (elapsed_min is rounded to whole
+    # turns-table row id: unique and in insertion order (elapsed_min is floored to whole
     # minutes, so it isn't), used as the `before` cursor for paging further back
     id: int
     elapsed_min: float

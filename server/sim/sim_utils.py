@@ -1,5 +1,18 @@
 "Shared utils so that we dont duplicate"
 
+import math
+
+# tolerance so float drift (e.g. 26.999999 from summed tick sizes) still counts as minute 27
+_MINUTE_EPSILON = 1e-6
+
+
+def whole_minutes(minutes: float) -> int:
+    """Floor to the whole minute. Not round(): Python rounds .5 to the nearest even number, so
+    with 30s ticks round() showed minute 26 for three ticks (25.5, 26.0, 26.5) and minute 27 for
+    one, and the clock went 6:26, 6:26, 6:26, 6:27, 6:28. Flooring reads like a stopwatch: every
+    minute shows for the same number of ticks and never runs ahead of real elapsed time."""
+    return math.floor(minutes + _MINUTE_EPSILON)
+
 
 def calculate_hour(start_hour: float, elapsed_min: float) -> float:
     hour = (start_hour + elapsed_min / 60) % 24
@@ -17,10 +30,8 @@ def format_clock_time(start_hour: float, elapsed_min: float) -> str:
     """Human clock time for the LLM prompt — runners think in "3am on day 2", not
     elapsed-minutes-since-start."""
     day = calculate_day(start_hour, elapsed_min)
-    hour = calculate_hour(start_hour, elapsed_min)
-    hh, mm = int(hour), round((hour % 1) * 60)
-    if mm == 60:
-        hh, mm = (hh + 1) % 24, 0
+    minute_of_day = whole_minutes(start_hour * 60 + elapsed_min) % (24 * 60)
+    hh, mm = divmod(minute_of_day, 60)
     period = "AM" if hh < 12 else "PM"
     display_hour = hh % 12 or 12
     return f"Day {day}, {display_hour}:{mm:02d} {period}"
